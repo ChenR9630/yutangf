@@ -29,8 +29,11 @@ import {
   Sparkles,
   Table2,
   TerminalSquare,
+  UserRound,
+  UserPlus,
   UsersRound,
   Wifi,
+  LogOut,
 } from "lucide-react";
 import "./styles.css";
 
@@ -44,6 +47,12 @@ type Message = {
   text: string;
   time: string;
   tag?: string;
+};
+
+type AuthUser = {
+  id: string;
+  username: string;
+  displayName: string;
 };
 
 type ServerToClientEvents = {
@@ -101,6 +110,11 @@ function App() {
   const [socket, setSocket] = useState<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
   const [online, setOnline] = useState<Partial<Record<RoomId, number>>>({});
   const [nickname, setNickname] = useState("匿名小鱼");
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authForm, setAuthForm] = useState({ username: "", displayName: "", password: "" });
+  const [authError, setAuthError] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
   const [draft, setDraft] = useState("");
   const [sendError, setSendError] = useState("");
   const [privateMode, setPrivateMode] = useState(false);
@@ -121,6 +135,10 @@ function App() {
         if (!mounted) return;
         if (Array.isArray(data.messages)) setMessages(data.messages);
         if (data.online) setOnline(data.online);
+        if (data.user) {
+          setUser(data.user);
+          setNickname(data.user.displayName);
+        }
       })
       .catch(() => {
         if (mounted) setSendError("后端暂未连接，已使用本地演示数据。");
@@ -138,6 +156,36 @@ function App() {
       nextSocket.disconnect();
     };
   }, []);
+
+  const submitAuth = async () => {
+    setAuthBusy(true);
+    setAuthError("");
+    try {
+      const response = await fetch(`/api/auth/${authMode}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(authForm),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.user) {
+        setAuthError(authErrorText(result.error));
+        return;
+      }
+      setUser(result.user);
+      setNickname(result.user.displayName);
+      setAuthForm({ username: "", displayName: "", password: "" });
+    } catch {
+      setAuthError("账户服务暂时不可用，请稍后再试。");
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const logout = async () => {
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    setUser(null);
+    setNickname("匿名小鱼");
+  };
 
   useEffect(() => {
     if (activeRoom) document.title = activeRoom.file;
@@ -217,7 +265,19 @@ function App() {
   return (
     <div className={`app ${mode === "ps" ? "theme-dark" : "theme-office"}`}>
       {mode === "home" ? (
-        <Home now={now} onEnter={setMode} />
+        <Home
+          now={now}
+          user={user}
+          authMode={authMode}
+          authForm={authForm}
+          authError={authError}
+          authBusy={authBusy}
+          onAuthMode={setAuthMode}
+          onAuthForm={setAuthForm}
+          onSubmitAuth={submitAuth}
+          onLogout={logout}
+          onEnter={setMode}
+        />
       ) : (
         <Workspace
           mode={mode}
@@ -228,18 +288,44 @@ function App() {
           online={online}
           sendError={sendError}
           privateMode={privateMode}
+          user={user}
           onMode={setMode}
           onNickname={setNickname}
           onDraft={setDraft}
           onSend={sendMessage}
           onPrivacy={() => setPrivateMode((value) => !value)}
+          onLogout={logout}
         />
       )}
     </div>
   );
 }
 
-function Home({ now, onEnter }: { now: Date; onEnter: (mode: ModeId) => void }) {
+function Home({
+  now,
+  user,
+  authMode,
+  authForm,
+  authError,
+  authBusy,
+  onAuthMode,
+  onAuthForm,
+  onSubmitAuth,
+  onLogout,
+  onEnter,
+}: {
+  now: Date;
+  user: AuthUser | null;
+  authMode: "login" | "register";
+  authForm: { username: string; displayName: string; password: string };
+  authError: string;
+  authBusy: boolean;
+  onAuthMode: (mode: "login" | "register") => void;
+  onAuthForm: (form: { username: string; displayName: string; password: string }) => void;
+  onSubmitAuth: () => void;
+  onLogout: () => void;
+  onEnter: (mode: ModeId) => void;
+}) {
   return (
     <main className="home-shell">
       <header className="home-topbar">
@@ -255,28 +341,41 @@ function Home({ now, onEnter }: { now: Date; onEnter: (mode: ModeId) => void }) 
         <SystemStatus now={now} />
       </header>
 
-      <section className="launch-panel" aria-label="模式入口">
-        <button className="launch-card" onClick={() => onEnter("word")}>
-          <div className="launch-icon office-icon">
-            <FileText size={34} />
-          </div>
-          <div>
-            <strong>办公职员模式</strong>
-            <span>文档、表格、演示协作套件</span>
-          </div>
-          <ChevronRight size={20} />
-        </button>
-        <button className="launch-card" onClick={() => onEnter("ps")}>
-          <div className="launch-icon design-icon">
-            <Brush size={34} />
-          </div>
-          <div>
-            <strong>设计职员模式</strong>
-            <span>专业设计工作台</span>
-          </div>
-          <ChevronRight size={20} />
-        </button>
-      </section>
+      <div className="home-main">
+        <section className="launch-panel" aria-label="模式入口">
+          <button className="launch-card" onClick={() => onEnter("word")}>
+            <div className="launch-icon office-icon">
+              <FileText size={34} />
+            </div>
+            <div>
+              <strong>办公职员模式</strong>
+              <span>文档、表格、演示协作套件</span>
+            </div>
+            <ChevronRight size={20} />
+          </button>
+          <button className="launch-card" onClick={() => onEnter("ps")}>
+            <div className="launch-icon design-icon">
+              <Brush size={34} />
+            </div>
+            <div>
+              <strong>设计职员模式</strong>
+              <span>专业设计工作台</span>
+            </div>
+            <ChevronRight size={20} />
+          </button>
+        </section>
+        <AuthPanel
+          user={user}
+          mode={authMode}
+          form={authForm}
+          error={authError}
+          busy={authBusy}
+          onMode={onAuthMode}
+          onForm={onAuthForm}
+          onSubmit={onSubmitAuth}
+          onLogout={onLogout}
+        />
+      </div>
 
       <section className="status-grid">
         <div>
@@ -304,6 +403,106 @@ function Home({ now, onEnter }: { now: Date; onEnter: (mode: ModeId) => void }) 
   );
 }
 
+function AuthPanel({
+  user,
+  mode,
+  form,
+  error,
+  busy,
+  onMode,
+  onForm,
+  onSubmit,
+  onLogout,
+}: {
+  user: AuthUser | null;
+  mode: "login" | "register";
+  form: { username: string; displayName: string; password: string };
+  error: string;
+  busy: boolean;
+  onMode: (mode: "login" | "register") => void;
+  onForm: (form: { username: string; displayName: string; password: string }) => void;
+  onSubmit: () => void;
+  onLogout: () => void;
+}) {
+  if (user) {
+    return (
+      <aside className="auth-panel account-panel">
+        <div className="auth-heading">
+          <UserRound size={19} />
+          <div>
+            <strong>{user.displayName}</strong>
+            <span>@{user.username}</span>
+          </div>
+        </div>
+        <div className="account-meter">
+          <span>账户状态</span>
+          <strong>已登录</strong>
+        </div>
+        <button className="auth-submit secondary" onClick={onLogout}>
+          <LogOut size={16} />
+          退出账户
+        </button>
+      </aside>
+    );
+  }
+
+  return (
+    <aside className="auth-panel">
+      <div className="auth-tabs" role="tablist" aria-label="账户入口">
+        <button className={mode === "login" ? "active" : ""} onClick={() => onMode("login")}>
+          <UserRound size={15} />
+          登录
+        </button>
+        <button className={mode === "register" ? "active" : ""} onClick={() => onMode("register")}>
+          <UserPlus size={15} />
+          注册
+        </button>
+      </div>
+      <label className="field-label">
+        用户名
+        <input
+          value={form.username}
+          autoComplete="username"
+          onChange={(event) => onForm({ ...form, username: event.target.value })}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") onSubmit();
+          }}
+        />
+      </label>
+      {mode === "register" && (
+        <label className="field-label">
+          昵称
+          <input
+            value={form.displayName}
+            maxLength={12}
+            onChange={(event) => onForm({ ...form, displayName: event.target.value })}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") onSubmit();
+            }}
+          />
+        </label>
+      )}
+      <label className="field-label">
+        密码
+        <input
+          type="password"
+          value={form.password}
+          autoComplete={mode === "login" ? "current-password" : "new-password"}
+          onChange={(event) => onForm({ ...form, password: event.target.value })}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") onSubmit();
+          }}
+        />
+      </label>
+      {error && <p className="send-error">{error}</p>}
+      <button className="auth-submit" onClick={onSubmit} disabled={busy}>
+        {mode === "login" ? <UserRound size={16} /> : <UserPlus size={16} />}
+        {busy ? "处理中" : mode === "login" ? "进入账户" : "创建账户"}
+      </button>
+    </aside>
+  );
+}
+
 function Workspace(props: {
   mode: Exclude<ModeId, "home">;
   now: Date;
@@ -313,11 +512,13 @@ function Workspace(props: {
   draft: string;
   sendError: string;
   privateMode: boolean;
+  user: AuthUser | null;
   onMode: (mode: ModeId) => void;
   onNickname: (value: string) => void;
   onDraft: (value: string) => void;
   onSend: () => void;
   onPrivacy: () => void;
+  onLogout: () => void;
 }) {
   const room = rooms[props.mode];
   const online = props.online[props.mode] ?? 19 + props.mode.length * 3;
@@ -357,9 +558,20 @@ function Workspace(props: {
               <UsersRound size={18} />
             </div>
             <label className="field-label">
-              临时昵称
-              <input value={props.nickname} onChange={(event) => props.onNickname(event.target.value)} maxLength={12} />
+              {props.user ? "账户昵称" : "临时昵称"}
+              <input
+                value={props.user?.displayName || props.nickname}
+                onChange={(event) => props.onNickname(event.target.value)}
+                maxLength={12}
+                disabled={Boolean(props.user)}
+              />
             </label>
+            {props.user && (
+              <button className="account-inline" onClick={props.onLogout}>
+                <LogOut size={15} />
+                退出 @{props.user.username}
+              </button>
+            )}
             <div className="topic-chips">
               {(props.mode === "excel" ? topics : quickTools).map((topic) => (
                 <button key={topic}>{topic}</button>
@@ -397,6 +609,15 @@ function errorText(error?: string) {
   if (error === "blocked_content") return "这条内容触发了安全过滤，换个说法再发。";
   if (error === "empty_message") return "协作备注不能为空。";
   return "发送失败，请稍后再试。";
+}
+
+function authErrorText(error?: string) {
+  if (error === "invalid_username") return "用户名至少 3 个字符。";
+  if (error === "invalid_display_name") return "昵称不能为空。";
+  if (error === "weak_password") return "密码至少 6 位。";
+  if (error === "username_taken") return "这个用户名已经被占用。";
+  if (error === "invalid_credentials") return "用户名或密码不正确。";
+  return "账户操作失败，请稍后再试。";
 }
 
 function Toolbar({
