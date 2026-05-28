@@ -120,7 +120,14 @@ p {
   display: grid;
   grid-template-columns: repeat(2, minmax(260px, 1fr));
   gap: 18px;
-  width: min(960px, 100%);
+  min-width: 0;
+}
+
+.home-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 310px;
+  gap: 22px;
+  width: min(1180px, 100%);
   margin: auto;
 }
 
@@ -174,6 +181,100 @@ p {
   gap: 14px;
   width: min(960px, 100%);
   margin: 0 auto 28px;
+}
+
+.auth-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid #c9d3df;
+  border-radius: 8px;
+  background: #f8fafc;
+  box-shadow: 0 10px 26px rgba(49, 71, 92, 0.08);
+}
+
+.auth-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid #d1dbe5;
+  border-radius: 8px;
+  background: #eef3f7;
+}
+
+.auth-tabs button,
+.auth-submit,
+.account-inline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 0;
+  height: 34px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: inherit;
+  background: transparent;
+}
+
+.auth-tabs button {
+  font-size: 13px;
+}
+
+.auth-tabs button.active {
+  border-color: #b9c8d6;
+  background: #ffffff;
+}
+
+.auth-submit {
+  width: 100%;
+  border-color: #8fb3c9;
+  color: #ffffff;
+  background: #286b8f;
+}
+
+.auth-submit.secondary {
+  border-color: #c2ceda;
+  color: #34495e;
+  background: #eef4f8;
+}
+
+.auth-submit:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.auth-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #d7e0e8;
+}
+
+.auth-heading strong,
+.auth-heading span,
+.account-meter span,
+.account-meter strong {
+  display: block;
+}
+
+.auth-heading span,
+.account-meter span {
+  color: #667789;
+  font-size: 12px;
+}
+
+.account-meter {
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+  border: 1px solid #d7e0e8;
+  border-radius: 8px;
+  background: #ffffff;
 }
 
 .status-grid div {
@@ -622,11 +723,35 @@ p {
   outline: none;
 }
 
+.field-label input:disabled {
+  color: #52677a;
+  background: #edf3f7;
+}
+
 .theme-dark .field-label input,
 .theme-dark .compose-row input {
   border-color: #424a56;
   color: #e4e7eb;
   background: #1f2329;
+}
+
+.theme-dark .field-label input:disabled {
+  color: #b8c4cf;
+  background: #2a3038;
+}
+
+.account-inline {
+  height: 32px;
+  border-color: #cbd7e2;
+  color: #52677a;
+  background: #eef4f8;
+  font-size: 12px;
+}
+
+.theme-dark .account-inline {
+  border-color: #3d4450;
+  color: #cbd5df;
+  background: #303640;
 }
 
 .topic-chips {
@@ -707,6 +832,11 @@ p {
   .status-grid {
     grid-template-columns: 1fr;
     margin-top: 28px;
+  }
+
+  .home-main {
+    grid-template-columns: 1fr;
+    margin: 28px auto;
   }
 
   .workspace {
