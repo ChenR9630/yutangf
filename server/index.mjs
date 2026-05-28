@@ -2,6 +2,7 @@ import compression from "compression";
 import express from "express";
 import helmet from "helmet";
 import http from "node:http";
+import crypto from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +13,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 const dataDir = path.join(rootDir, "data");
 const messagesPath = path.join(dataDir, "messages.json");
+const usersPath = path.join(dataDir, "users.json");
 const distDir = path.join(rootDir, "dist");
 const port = Number(process.env.PORT || 8787);
 
@@ -36,7 +38,10 @@ const seedMessages = [
 const blockedWords = ["暴力", "造谣", "人身攻击", "低俗"];
 const maxMessagesPerRoom = 120;
 let messages = await loadMessages();
+let users = await loadUsers();
 let saveTimer;
+let userSaveTimer;
+const sessions = new Map();
 const onlineByRoom = new Map(rooms.map((room) => [room, new Set()]));
 
 const app = express();
@@ -53,6 +58,11 @@ app.use(compression());
 app.use(express.json({ limit: "24kb" }));
 app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 
+app.use((request, _response, next) => {
+  request.currentUser = userFromRequest(request);
+  next();
+});
+
 app.get("/api/health", (_request, response) => {
   response.json({
     ok: true,
@@ -67,12 +77,75 @@ app.get("/api/bootstrap", (_request, response) => {
     rooms: roomLabels,
     messages,
     online: onlineSnapshot(),
+    user: safeUser(_request.currentUser),
     policies: {
-      anonymous: true,
+      anonymous: false,
       maxMessageLength: 180,
       mutedNotifications: true,
     },
   });
+});
+
+app.get("/api/auth/me", (request, response) => {
+  response.json({ user: safeUser(request.currentUser) });
+});
+
+app.post("/api/auth/register", async (request, response) => {
+  const username = normalizeUsername(request.body?.username);
+  const displayName = sanitizeText(request.body?.displayName || username).slice(0, 12);
+  const password = String(request.body?.password || "");
+
+  if (!username || username.length < 3) {
+    response.status(400).json({ ok: false, error: "invalid_username" });
+    return;
+  }
+  if (!displayName) {
+    response.status(400).json({ ok: false, error: "invalid_display_name" });
+    return;
+  }
+  if (password.length < 6) {
+    response.status(400).json({ ok: false, error: "weak_password" });
+    return;
+  }
+  if (users.some((user) => user.username === username)) {
+    response.status(409).json({ ok: false, error: "username_taken" });
+    return;
+  }
+
+  const user = {
+    id: crypto.randomUUID(),
+    username,
+    displayName,
+    password: hashPassword(password),
+    createdAt: new Date().toISOString(),
+  };
+  users = [...users, user];
+  scheduleUserSave();
+  const sessionId = createSession(user.id);
+  setSessionCookie(response, sessionId);
+  response.status(201).json({ ok: true, user: safeUser(user) });
+});
+
+app.post("/api/auth/login", (request, response) => {
+  const username = normalizeUsername(request.body?.username);
+  const password = String(request.body?.password || "");
+  const user = users.find((item) => item.username === username);
+
+  if (!user || !verifyPassword(password, user.password)) {
+    response.status(401).json({ ok: false, error: "invalid_credentials" });
+    return;
+  }
+
+  const sessionId = createSession(user.id);
+  setSessionCookie(response, sessionId);
+  response.json({ ok: true, user: safeUser(user) });
+});
+
+app.post("/api/auth/logout", (request, response) => {
+  const sessionId = readCookie(request, "yt_session");
+  if (sessionId) sessions.delete(sessionId);
+  clearSessionCookie(response);
+  response.json({ ok: true });
 });
 
 app.post("/api/report", (request, response) => {
@@ -95,6 +168,8 @@ if (process.env.NODE_ENV === "production") {
 }
 
 io.on("connection", (socket) => {
+  const user = userFromCookieHeader(socket.handshake.headers.cookie || "");
+  socket.data.user = user ? safeUser(user) : null;
   socket.emit("online:update", onlineSnapshot());
 
   socket.on("room:join", (room) => {
@@ -106,7 +181,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("message:create", (payload, acknowledge) => {
-    const result = createMessage(payload);
+    const result = createMessage(payload, socket.data.user);
     if (!result.ok) {
       acknowledge?.(result);
       return;
@@ -139,9 +214,21 @@ async function loadMessages() {
   }
 }
 
-function createMessage(payload = {}) {
+async function loadUsers() {
+  try {
+    const raw = await readFile(usersPath, "utf8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    await mkdir(dataDir, { recursive: true });
+    await writeFile(usersPath, JSON.stringify([], null, 2));
+    return [];
+  }
+}
+
+function createMessage(payload = {}, user) {
   const room = String(payload.room || "");
-  const name = sanitizeText(payload.name || "匿名小鱼").slice(0, 12) || "匿名小鱼";
+  const name = sanitizeText(user?.displayName || payload.name || "匿名小鱼").slice(0, 12) || "匿名小鱼";
   const text = sanitizeText(payload.text || "").slice(0, 180);
   const tag = sanitizeText(payload.tag || roomDefaultTag(room)).slice(0, 8);
 
@@ -169,6 +256,79 @@ function sanitizeText(value) {
     .trim();
 }
 
+function normalizeUsername(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "");
+}
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.pbkdf2Sync(password, salt, 120000, 32, "sha256").toString("hex");
+  return `pbkdf2:${salt}:${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  const [method, salt, expected] = String(stored || "").split(":");
+  if (method !== "pbkdf2" || !salt || !expected) return false;
+  const actual = crypto.pbkdf2Sync(password, salt, 120000, 32, "sha256");
+  const expectedBuffer = Buffer.from(expected, "hex");
+  return expectedBuffer.length === actual.length && crypto.timingSafeEqual(expectedBuffer, actual);
+}
+
+function createSession(userId) {
+  const sessionId = crypto.randomBytes(32).toString("hex");
+  sessions.set(sessionId, {
+    userId,
+    expiresAt: Date.now() + 1000 * 60 * 60 * 24 * 14,
+  });
+  return sessionId;
+}
+
+function userFromRequest(request) {
+  return userFromCookieHeader(request.headers.cookie || "");
+}
+
+function userFromCookieHeader(cookieHeader) {
+  const sessionId = readCookie({ headers: { cookie: cookieHeader } }, "yt_session");
+  if (!sessionId) return null;
+  const session = sessions.get(sessionId);
+  if (!session) return null;
+  if (session.expiresAt < Date.now()) {
+    sessions.delete(sessionId);
+    return null;
+  }
+  return users.find((user) => user.id === session.userId) || null;
+}
+
+function readCookie(request, name) {
+  const cookies = String(request.headers.cookie || "").split(";").map((item) => item.trim());
+  const cookie = cookies.find((item) => item.startsWith(`${name}=`));
+  return cookie ? decodeURIComponent(cookie.slice(name.length + 1)) : "";
+}
+
+function setSessionCookie(response, sessionId) {
+  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  response.setHeader(
+    "Set-Cookie",
+    `yt_session=${encodeURIComponent(sessionId)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 24 * 14}${secure}`,
+  );
+}
+
+function clearSessionCookie(response) {
+  response.setHeader("Set-Cookie", "yt_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
+}
+
+function safeUser(user) {
+  if (!user) return null;
+  return {
+    id: user.id,
+    username: user.username,
+    displayName: user.displayName,
+  };
+}
+
 function roomDefaultTag(room) {
   if (room === "excel") return "话题";
   if (room === "ppt") return "喂鱼";
@@ -192,5 +352,13 @@ function scheduleSave() {
   saveTimer = setTimeout(async () => {
     await mkdir(dataDir, { recursive: true });
     await writeFile(messagesPath, JSON.stringify(messages.slice(-maxMessagesPerRoom * rooms.length), null, 2));
+  }, 250);
+}
+
+function scheduleUserSave() {
+  clearTimeout(userSaveTimer);
+  userSaveTimer = setTimeout(async () => {
+    await mkdir(dataDir, { recursive: true });
+    await writeFile(usersPath, JSON.stringify(users, null, 2));
   }, 250);
 }
