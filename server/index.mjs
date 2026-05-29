@@ -15,6 +15,7 @@ const dataDir = path.join(rootDir, "data");
 const messagesPath = path.join(dataDir, "messages.json");
 const usersPath = path.join(dataDir, "users.json");
 const distDir = path.join(rootDir, "dist");
+const indexPath = path.join(distDir, "index.html");
 const port = Number(process.env.PORT || 8787);
 
 const rooms = ["word", "excel", "ppt", "ps"];
@@ -162,8 +163,12 @@ app.post("/api/report", (request, response) => {
 
 if (process.env.NODE_ENV === "production") {
   app.use(express.static(distDir, { maxAge: "1h", index: false }));
-  app.use((_request, response) => {
-    response.sendFile(path.join(distDir, "index.html"));
+  app.use(async (_request, response, next) => {
+    try {
+      response.type("html").send(await readFile(indexPath, "utf8"));
+    } catch (error) {
+      next(error);
+    }
   });
 }
 
