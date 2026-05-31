@@ -4,6 +4,7 @@ import helmet from "helmet";
 import http from "node:http";
 import crypto from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import morgan from "morgan";
@@ -14,9 +15,11 @@ const rootDir = path.resolve(__dirname, "..");
 const dataDir = path.join(rootDir, "data");
 const messagesPath = path.join(dataDir, "messages.json");
 const usersPath = path.join(dataDir, "users.json");
+const authDbPath = path.join(dataDir, "auth.sqlite");
 const distDir = path.join(rootDir, "dist");
 const indexPath = path.join(distDir, "index.html");
 const port = Number(process.env.PORT || 8787);
+const sessionTtlMs = 1000 * 60 * 60 * 24 * 14;
 
 const rooms = ["word", "excel", "ppt", "ps"];
 const roomLabels = {
@@ -39,10 +42,12 @@ const seedMessages = [
 const blockedWords = ["暴力", "造谣", "人身攻击", "低俗"];
 const maxMessagesPerRoom = 120;
 let messages = await loadMessages();
-let users = await loadUsers();
+await mkdir(dataDir, { recursive: true });
+const authDb = new DatabaseSync(authDbPath);
+initializeAuthDb();
+await migrateUsersFromJson();
 let saveTimer;
-let userSaveTimer;
-const sessions = new Map();
+const rateLimitBuckets = new Map();
 const onlineByRoom = new Map(rooms.map((room) => [room, new Set()]));
 
 const app = express();
@@ -54,6 +59,7 @@ const io = new Server(server, {
 });
 
 app.disable("x-powered-by");
+app.set("trust proxy", "loopback");
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(compression());
 app.use(express.json({ limit: "24kb" }));
@@ -95,6 +101,12 @@ app.post("/api/auth/register", async (request, response) => {
   const username = normalizeUsername(request.body?.username);
   const displayName = sanitizeText(request.body?.displayName || username).slice(0, 12);
   const password = String(request.body?.password || "");
+  const rateLimit = consumeRateLimit(request, "register", username, 5, 15 * 60 * 1000);
+
+  if (!rateLimit.ok) {
+    response.status(429).json({ ok: false, error: "rate_limited", retryAfter: rateLimit.retryAfter });
+    return;
+  }
 
   if (!username || username.length < 3) {
     response.status(400).json({ ok: false, error: "invalid_username" });
@@ -104,24 +116,23 @@ app.post("/api/auth/register", async (request, response) => {
     response.status(400).json({ ok: false, error: "invalid_display_name" });
     return;
   }
-  if (password.length < 6) {
-    response.status(400).json({ ok: false, error: "weak_password" });
+  const passwordCheck = validatePassword(password, username);
+  if (!passwordCheck.ok) {
+    response.status(400).json({ ok: false, error: passwordCheck.error });
     return;
   }
-  if (users.some((user) => user.username === username)) {
+  if (getUserByUsername(username)) {
     response.status(409).json({ ok: false, error: "username_taken" });
     return;
   }
 
-  const user = {
+  const user = createUser({
     id: crypto.randomUUID(),
     username,
     displayName,
     password: hashPassword(password),
     createdAt: new Date().toISOString(),
-  };
-  users = [...users, user];
-  scheduleUserSave();
+  });
   const sessionId = createSession(user.id);
   setSessionCookie(response, sessionId);
   response.status(201).json({ ok: true, user: safeUser(user) });
@@ -130,7 +141,14 @@ app.post("/api/auth/register", async (request, response) => {
 app.post("/api/auth/login", (request, response) => {
   const username = normalizeUsername(request.body?.username);
   const password = String(request.body?.password || "");
-  const user = users.find((item) => item.username === username);
+  const rateLimit = consumeRateLimit(request, "login", username, 8, 10 * 60 * 1000);
+
+  if (!rateLimit.ok) {
+    response.status(429).json({ ok: false, error: "rate_limited", retryAfter: rateLimit.retryAfter });
+    return;
+  }
+
+  const user = getUserByUsername(username);
 
   if (!user || !verifyPassword(password, user.password)) {
     response.status(401).json({ ok: false, error: "invalid_credentials" });
@@ -144,7 +162,7 @@ app.post("/api/auth/login", (request, response) => {
 
 app.post("/api/auth/logout", (request, response) => {
   const sessionId = readCookie(request, "yt_session");
-  if (sessionId) sessions.delete(sessionId);
+  if (sessionId) deleteSession(sessionId);
   clearSessionCookie(response);
   response.json({ ok: true });
 });
@@ -219,21 +237,11 @@ async function loadMessages() {
   }
 }
 
-async function loadUsers() {
-  try {
-    const raw = await readFile(usersPath, "utf8");
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    await mkdir(dataDir, { recursive: true });
-    await writeFile(usersPath, JSON.stringify([], null, 2));
-    return [];
-  }
-}
-
 function createMessage(payload = {}, user) {
   const room = String(payload.room || "");
-  const name = sanitizeText(user?.displayName || payload.name || "匿名小鱼").slice(0, 12) || "匿名小鱼";
+  if (!user) return { ok: false, error: "login_required" };
+
+  const name = sanitizeText(user.displayName).slice(0, 12) || "已登录用户";
   const text = sanitizeText(payload.text || "").slice(0, 180);
   const tag = sanitizeText(payload.tag || roomDefaultTag(room)).slice(0, 8);
 
@@ -268,6 +276,100 @@ function normalizeUsername(value) {
     .replace(/\s+/g, "");
 }
 
+function initializeAuthDb() {
+  authDb.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA foreign_keys = ON;
+
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      username TEXT NOT NULL UNIQUE,
+      display_name TEXT NOT NULL,
+      password TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+  `);
+  authDb.prepare("DELETE FROM sessions WHERE expires_at < ?").run(Date.now());
+}
+
+async function migrateUsersFromJson() {
+  try {
+    const raw = await readFile(usersPath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return;
+
+    const insertUser = authDb.prepare(`
+      INSERT OR IGNORE INTO users (id, username, display_name, password, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+
+    for (const user of parsed) {
+      const username = normalizeUsername(user?.username);
+      const displayName = sanitizeText(user?.displayName || username).slice(0, 12);
+      if (!user?.id || !username || !displayName || !user?.password) continue;
+      insertUser.run(user.id, username, displayName, String(user.password), user.createdAt || new Date().toISOString());
+    }
+  } catch {
+    // Fresh installs no longer need users.json; SQLite is the source of truth.
+  }
+}
+
+function createUser(user) {
+  authDb
+    .prepare("INSERT INTO users (id, username, display_name, password, created_at) VALUES (?, ?, ?, ?, ?)")
+    .run(user.id, user.username, user.displayName, user.password, user.createdAt);
+  return user;
+}
+
+function getUserByUsername(username) {
+  return rowToUser(authDb.prepare("SELECT * FROM users WHERE username = ?").get(username));
+}
+
+function getUserById(userId) {
+  return rowToUser(authDb.prepare("SELECT * FROM users WHERE id = ?").get(userId));
+}
+
+function rowToUser(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    username: row.username,
+    displayName: row.display_name,
+    password: row.password,
+    createdAt: row.created_at,
+  };
+}
+
+function validatePassword(password, username) {
+  if (password.length < 10) return { ok: false, error: "weak_password" };
+  if (password.length > 128) return { ok: false, error: "password_too_long" };
+  if (username && password.toLowerCase().includes(username.toLowerCase())) {
+    return { ok: false, error: "password_contains_username" };
+  }
+
+  const classes = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter((pattern) => pattern.test(password)).length;
+  if (classes < 3) return { ok: false, error: "weak_password" };
+
+  const common = ["password", "123456", "qwerty", "admin", "letmein", "yutang"];
+  if (common.some((item) => password.toLowerCase().includes(item))) {
+    return { ok: false, error: "common_password" };
+  }
+
+  return { ok: true };
+}
+
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString("hex");
   const hash = crypto.pbkdf2Sync(password, salt, 120000, 32, "sha256").toString("hex");
@@ -284,10 +386,10 @@ function verifyPassword(password, stored) {
 
 function createSession(userId) {
   const sessionId = crypto.randomBytes(32).toString("hex");
-  sessions.set(sessionId, {
-    userId,
-    expiresAt: Date.now() + 1000 * 60 * 60 * 24 * 14,
-  });
+  const now = Date.now();
+  authDb
+    .prepare("INSERT INTO sessions (id, user_id, expires_at, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)")
+    .run(sessionId, userId, now + sessionTtlMs, now, now);
   return sessionId;
 }
 
@@ -298,13 +400,45 @@ function userFromRequest(request) {
 function userFromCookieHeader(cookieHeader) {
   const sessionId = readCookie({ headers: { cookie: cookieHeader } }, "yt_session");
   if (!sessionId) return null;
-  const session = sessions.get(sessionId);
+  const session = authDb.prepare("SELECT * FROM sessions WHERE id = ?").get(sessionId);
   if (!session) return null;
-  if (session.expiresAt < Date.now()) {
-    sessions.delete(sessionId);
+  if (session.expires_at < Date.now()) {
+    deleteSession(sessionId);
     return null;
   }
-  return users.find((user) => user.id === session.userId) || null;
+  authDb.prepare("UPDATE sessions SET last_seen_at = ? WHERE id = ?").run(Date.now(), sessionId);
+  return getUserById(session.user_id);
+}
+
+function deleteSession(sessionId) {
+  authDb.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId);
+}
+
+function consumeRateLimit(request, action, username, limit, windowMs) {
+  const now = Date.now();
+  const ip = request.ip || request.socket?.remoteAddress || "unknown";
+  const key = `${action}:${ip}:${username || "anonymous"}`;
+  const bucket = rateLimitBuckets.get(key);
+
+  if (!bucket || bucket.resetAt <= now) {
+    rateLimitBuckets.set(key, { count: 1, resetAt: now + windowMs });
+    cleanupRateLimitBuckets(now);
+    return { ok: true };
+  }
+
+  bucket.count += 1;
+  if (bucket.count > limit) {
+    return { ok: false, retryAfter: Math.ceil((bucket.resetAt - now) / 1000) };
+  }
+
+  return { ok: true };
+}
+
+function cleanupRateLimitBuckets(now) {
+  if (rateLimitBuckets.size < 2000) return;
+  for (const [key, bucket] of rateLimitBuckets) {
+    if (bucket.resetAt <= now) rateLimitBuckets.delete(key);
+  }
 }
 
 function readCookie(request, name) {
@@ -317,7 +451,7 @@ function setSessionCookie(response, sessionId) {
   const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
   response.setHeader(
     "Set-Cookie",
-    `yt_session=${encodeURIComponent(sessionId)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 24 * 14}${secure}`,
+    `yt_session=${encodeURIComponent(sessionId)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.round(sessionTtlMs / 1000)}${secure}`,
   );
 }
 
@@ -357,13 +491,5 @@ function scheduleSave() {
   saveTimer = setTimeout(async () => {
     await mkdir(dataDir, { recursive: true });
     await writeFile(messagesPath, JSON.stringify(messages.slice(-maxMessagesPerRoom * rooms.length), null, 2));
-  }, 250);
-}
-
-function scheduleUserSave() {
-  clearTimeout(userSaveTimer);
-  userSaveTimer = setTimeout(async () => {
-    await mkdir(dataDir, { recursive: true });
-    await writeFile(usersPath, JSON.stringify(users, null, 2));
   }, 250);
 }
