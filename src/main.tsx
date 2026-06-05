@@ -243,7 +243,7 @@ function App() {
 
   return (
     <div className={`app ${mode === "ps" ? "theme-dark" : "theme-office"}`}>
-      {mode === "home" ? (
+      {mode === "home" || (mode === "admin" && !user?.isAdmin) ? (
         <Home
           now={now}
           user={user}
@@ -257,11 +257,11 @@ function App() {
           onLogout={logout}
           onEnter={setMode}
         />
-      ) : mode === "admin" ? (
+      ) : mode === "admin" && user?.isAdmin ? (
         <AdminDashboard now={now} user={user} onMode={setMode} onLogout={logout} />
       ) : (
         <Workspace
-          mode={mode}
+          mode={mode as RoomId}
           rooms={rooms}
           now={now}
           messages={visibleMessages}
@@ -346,16 +346,6 @@ function Home({
             </div>
             <ChevronRight size={20} />
           </button>
-          <button className="launch-card" onClick={() => onEnter("admin")}>
-            <div className="launch-icon admin-icon">
-              <BarChart3 size={34} />
-            </div>
-            <div>
-              <strong>后端控制平台</strong>
-              <span>注册、活跃与消息运营指标</span>
-            </div>
-            <ChevronRight size={20} />
-          </button>
         </section>
         <AuthPanel
           user={user}
@@ -367,6 +357,7 @@ function Home({
           onForm={onAuthForm}
           onSubmit={onSubmitAuth}
           onLogout={onLogout}
+          onAdmin={() => onEnter("admin")}
         />
       </div>
 
@@ -406,6 +397,7 @@ function AuthPanel({
   onForm,
   onSubmit,
   onLogout,
+  onAdmin,
 }: {
   user: AuthUser | null;
   mode: AuthMode;
@@ -416,6 +408,7 @@ function AuthPanel({
   onForm: (form: AuthForm) => void;
   onSubmit: () => void;
   onLogout: () => void;
+  onAdmin: () => void;
 }) {
   if (user) {
     return (
@@ -431,6 +424,12 @@ function AuthPanel({
           <span>账户状态</span>
           <strong>{user.isAdmin ? "管理员" : "已登录"}</strong>
         </div>
+        {user.isAdmin && (
+          <button className="auth-submit" onClick={onAdmin}>
+            <BarChart3 size={16} />
+            运营面板
+          </button>
+        )}
         <button className="auth-submit secondary" onClick={onLogout}>
           <LogOut size={16} />
           退出账户
@@ -547,7 +546,7 @@ function AdminDashboard({
             <ChevronLeft size={17} />
           </button>
           <div>
-            <h1>后端控制平台</h1>
+            <h1>运营面板</h1>
             <p>注册、活跃、在线与消息运营状态</p>
           </div>
         </div>

@@ -175,11 +175,6 @@ p {
   background: #23343b;
 }
 
-.admin-icon {
-  color: #365314;
-  background: #e6f2d4;
-}
-
 .status-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(150px, 1fr));
