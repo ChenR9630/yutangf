@@ -23,9 +23,22 @@ npm start
 - `GET /` 前端页面
 - `GET /api/health` 健康检查
 - `GET /api/bootstrap` 初始化数据
+- `GET /api/auth/me` 当前登录用户
+- `POST /api/auth/register` 注册
+- `POST /api/auth/login` 登录
+- `POST /api/auth/logout` 退出
 - `POST /api/report` 消息举报
 - `/socket.io` 实时消息连接
 
+账户使用 SQLite 持久化到 `data/auth.sqlite`，登录 session 也保存在同一个数据库中。首次启动会自动把旧的 `data/users.json` 用户迁移到 SQLite。
+
 ## 部署
 
-Render 可直接使用仓库内的 `render.yaml`。通用容器平台可使用 `Dockerfile`。
+生产环境迁移到腾讯云香港轻量应用服务器。推荐使用仓库内的部署脚本：
+
+```bash
+sudo bash deploy/tencent-lighthouse/deploy.sh
+```
+
+脚本会在服务器上安装依赖、构建前端、创建 systemd 服务，并用 Nginx 反向代理到本地 Node 服务。
+详细步骤见 `deploy/tencent-lighthouse/README.md`。通用容器平台仍可使用 `Dockerfile`。

@@ -30,8 +30,8 @@ const roomLabels = {
 };
 
 const seedMessages = [
-  { id: 1, room: "word", name: "匿名锦鲤", text: "今天的日报已经写到像年度总结了。", time: "10:18", tag: "游水" },
-  { id: 2, room: "word", name: "临时协作者", text: "有没有三分钟恢复精神的办法，除了下班。", time: "10:21", tag: "树洞" },
+  { id: 1, room: "word", name: "锦鲤同事", text: "今天的日报已经写到像年度总结了。", time: "10:18", tag: "游水" },
+  { id: 2, room: "word", name: "协作者小林", text: "有没有三分钟恢复精神的办法，除了下班。", time: "10:21", tag: "树洞" },
   { id: 3, room: "excel", name: "A17", text: "午饭投票：麻辣烫 3 票，轻食 0 票。", time: "10:27", tag: "美食" },
   { id: 4, room: "excel", name: "C04", text: "推荐一个周末短剧，节奏快，不费脑。", time: "10:29", tag: "影视" },
   { id: 5, room: "ppt", name: "第 6 页备注", text: "新表情包已喂鱼：老板说简单改改系列。", time: "10:32", tag: "喂鱼" },
@@ -46,6 +46,7 @@ await mkdir(dataDir, { recursive: true });
 const authDb = new DatabaseSync(authDbPath);
 initializeAuthDb();
 await migrateUsersFromJson();
+ensureInitialAdmin();
 let saveTimer;
 const rateLimitBuckets = new Map();
 const onlineByRoom = new Map(rooms.map((room) => [room, new Set()]));
@@ -97,6 +98,19 @@ app.get("/api/auth/me", (request, response) => {
   response.json({ user: safeUser(request.currentUser) });
 });
 
+app.get("/api/admin/stats", (request, response) => {
+  if (!request.currentUser) {
+    response.status(401).json({ ok: false, error: "login_required" });
+    return;
+  }
+  if (!isAdmin(request.currentUser)) {
+    response.status(403).json({ ok: false, error: "admin_required" });
+    return;
+  }
+
+  response.json({ ok: true, stats: adminStats() });
+});
+
 app.post("/api/auth/register", async (request, response) => {
   const username = normalizeUsername(request.body?.username);
   const displayName = sanitizeText(request.body?.displayName || username).slice(0, 12);
@@ -132,6 +146,7 @@ app.post("/api/auth/register", async (request, response) => {
     displayName,
     password: hashPassword(password),
     createdAt: new Date().toISOString(),
+    isAdmin: shouldCreateAdminUser(),
   });
   const sessionId = createSession(user.id);
   setSessionCookie(response, sessionId);
@@ -204,6 +219,8 @@ io.on("connection", (socket) => {
   });
 
   socket.on("message:create", (payload, acknowledge) => {
+    const user = userFromCookieHeader(socket.handshake.headers.cookie || "");
+    socket.data.user = user ? safeUser(user) : null;
     const result = createMessage(payload, socket.data.user);
     if (!result.ok) {
       acknowledge?.(result);
@@ -286,7 +303,8 @@ function initializeAuthDb() {
       username TEXT NOT NULL UNIQUE,
       display_name TEXT NOT NULL,
       password TEXT NOT NULL,
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      is_admin INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS sessions (
@@ -301,7 +319,14 @@ function initializeAuthDb() {
     CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
   `);
+  addColumnIfMissing("users", "is_admin", "INTEGER NOT NULL DEFAULT 0");
   authDb.prepare("DELETE FROM sessions WHERE expires_at < ?").run(Date.now());
+}
+
+function addColumnIfMissing(table, column, definition) {
+  const columns = authDb.prepare(`PRAGMA table_info(${table})`).all();
+  if (columns.some((item) => item.name === column)) return;
+  authDb.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 async function migrateUsersFromJson() {
@@ -311,15 +336,15 @@ async function migrateUsersFromJson() {
     if (!Array.isArray(parsed)) return;
 
     const insertUser = authDb.prepare(`
-      INSERT OR IGNORE INTO users (id, username, display_name, password, created_at)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT OR IGNORE INTO users (id, username, display_name, password, created_at, is_admin)
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
 
     for (const user of parsed) {
       const username = normalizeUsername(user?.username);
       const displayName = sanitizeText(user?.displayName || username).slice(0, 12);
       if (!user?.id || !username || !displayName || !user?.password) continue;
-      insertUser.run(user.id, username, displayName, String(user.password), user.createdAt || new Date().toISOString());
+      insertUser.run(user.id, username, displayName, String(user.password), user.createdAt || new Date().toISOString(), user.isAdmin ? 1 : 0);
     }
   } catch {
     // Fresh installs no longer need users.json; SQLite is the source of truth.
@@ -328,8 +353,8 @@ async function migrateUsersFromJson() {
 
 function createUser(user) {
   authDb
-    .prepare("INSERT INTO users (id, username, display_name, password, created_at) VALUES (?, ?, ?, ?, ?)")
-    .run(user.id, user.username, user.displayName, user.password, user.createdAt);
+    .prepare("INSERT INTO users (id, username, display_name, password, created_at, is_admin) VALUES (?, ?, ?, ?, ?, ?)")
+    .run(user.id, user.username, user.displayName, user.password, user.createdAt, user.isAdmin ? 1 : 0);
   return user;
 }
 
@@ -349,7 +374,30 @@ function rowToUser(row) {
     displayName: row.display_name,
     password: row.password,
     createdAt: row.created_at,
+    isAdmin: Boolean(row.is_admin),
   };
+}
+
+function shouldCreateAdminUser() {
+  return Number(authDb.prepare("SELECT COUNT(*) AS count FROM users").get().count) === 0;
+}
+
+function ensureInitialAdmin() {
+  const adminCount = Number(authDb.prepare("SELECT COUNT(*) AS count FROM users WHERE is_admin = 1").get().count);
+  if (adminCount > 0) return;
+
+  const firstUser = authDb.prepare("SELECT id FROM users ORDER BY created_at ASC LIMIT 1").get();
+  if (firstUser) authDb.prepare("UPDATE users SET is_admin = 1 WHERE id = ?").run(firstUser.id);
+}
+
+function isAdmin(user) {
+  if (!user) return false;
+  if (user.isAdmin) return true;
+  const configuredAdmins = String(process.env.ADMIN_USERNAMES || "")
+    .split(",")
+    .map((item) => normalizeUsername(item))
+    .filter(Boolean);
+  return configuredAdmins.includes(normalizeUsername(user.username));
 }
 
 function validatePassword(password, username) {
@@ -465,6 +513,7 @@ function safeUser(user) {
     id: user.id,
     username: user.username,
     displayName: user.displayName,
+    isAdmin: isAdmin(user),
   };
 }
 
@@ -484,6 +533,118 @@ function leaveAllRooms(socket) {
 
 function onlineSnapshot() {
   return Object.fromEntries(rooms.map((room) => [room, 19 + room.length * 3 + (onlineByRoom.get(room)?.size || 0)]));
+}
+
+function adminStats() {
+  const now = Date.now();
+  const dayMs = 24 * 60 * 60 * 1000;
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const todayMs = startOfToday.getTime();
+  const activeSessions = Number(authDb.prepare("SELECT COUNT(*) AS count FROM sessions WHERE expires_at >= ?").get(now).count);
+  const activeUsers15m = Number(
+    authDb.prepare("SELECT COUNT(DISTINCT user_id) AS count FROM sessions WHERE expires_at >= ? AND last_seen_at >= ?").get(now, now - 15 * 60 * 1000).count,
+  );
+  const activeUsers24h = Number(
+    authDb.prepare("SELECT COUNT(DISTINCT user_id) AS count FROM sessions WHERE expires_at >= ? AND last_seen_at >= ?").get(now, now - dayMs).count,
+  );
+  const totalUsers = Number(authDb.prepare("SELECT COUNT(*) AS count FROM users").get().count);
+  const sessionsCreatedToday = Number(
+    authDb.prepare("SELECT COUNT(*) AS count FROM sessions WHERE created_at >= ?").get(todayMs).count,
+  );
+  const onlineSockets = rooms.reduce((total, room) => total + (onlineByRoom.get(room)?.size || 0), 0);
+  const realMessages = messages.filter((message) => Number(message.id) > 1000000000000);
+
+  return {
+    generatedAt: new Date(now).toISOString(),
+    totals: {
+      users: totalUsers,
+      messages: messages.length,
+      activeSessions,
+      onlineSockets,
+    },
+    activity: {
+      activeUsers15m,
+      activeUsers24h,
+      messagesLastHour: realMessages.filter((message) => Number(message.id) >= now - 60 * 60 * 1000).length,
+      messagesToday: realMessages.filter((message) => Number(message.id) >= todayMs).length,
+      sessionsCreatedToday,
+    },
+    rooms: rooms.map((room) => ({
+      id: room,
+      label: roomLabels[room],
+      online: onlineByRoom.get(room)?.size || 0,
+      messages: messages.filter((message) => message.room === room).length,
+    })),
+    registrationsByDay: registrationBuckets(7),
+    messagesByHour: messageBuckets(12, now),
+    recentUsers: recentUsers(),
+    latestMessages: messages.slice(-8).reverse(),
+  };
+}
+
+function recentUsers() {
+  return authDb
+    .prepare(`
+      SELECT
+        users.id,
+        users.username,
+        users.display_name,
+        users.created_at,
+        users.is_admin,
+        MAX(sessions.last_seen_at) AS last_seen_at,
+        COUNT(sessions.id) AS active_sessions
+      FROM users
+      LEFT JOIN sessions ON sessions.user_id = users.id AND sessions.expires_at >= ?
+      GROUP BY users.id
+      ORDER BY users.created_at DESC
+      LIMIT 8
+    `)
+    .all(Date.now())
+    .map((user) => ({
+      id: user.id,
+      username: user.username,
+      displayName: user.display_name,
+      createdAt: user.created_at,
+      isAdmin: Boolean(user.is_admin),
+      lastSeenAt: user.last_seen_at ? new Date(user.last_seen_at).toISOString() : null,
+      activeSessions: Number(user.active_sessions || 0),
+    }));
+}
+
+function registrationBuckets(days) {
+  const buckets = [];
+  const now = new Date();
+  const users = authDb.prepare("SELECT created_at FROM users").all();
+
+  for (let offset = days - 1; offset >= 0; offset -= 1) {
+    const date = new Date(now);
+    date.setDate(now.getDate() - offset);
+    const key = date.toISOString().slice(0, 10);
+    buckets.push({
+      date: key,
+      count: users.filter((user) => String(user.created_at || "").slice(0, 10) === key).length,
+    });
+  }
+
+  return buckets;
+}
+
+function messageBuckets(hours, now) {
+  const buckets = [];
+  const hourMs = 60 * 60 * 1000;
+  const realMessages = messages.filter((message) => Number(message.id) > 1000000000000);
+
+  for (let offset = hours - 1; offset >= 0; offset -= 1) {
+    const start = Math.floor((now - offset * hourMs) / hourMs) * hourMs;
+    const end = start + hourMs;
+    buckets.push({
+      hour: new Date(start).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }),
+      count: realMessages.filter((message) => Number(message.id) >= start && Number(message.id) < end).length,
+    });
+  }
+
+  return buckets;
 }
 
 function scheduleSave() {

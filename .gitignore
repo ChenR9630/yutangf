@@ -1,6 +1,10 @@
 node_modules/
 dist/
 data/users.json
+data/auth.sqlite
+data/auth.sqlite-shm
+data/auth.sqlite-wal
+STATUS.md
 .DS_Store
 .env
 npm-debug.log*

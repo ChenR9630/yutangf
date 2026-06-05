@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { io, type Socket } from "socket.io-client";
 import {
+  Activity,
+  BarChart3,
   BellOff,
   Brush,
   ChevronLeft,
@@ -35,92 +37,64 @@ import {
   Wifi,
   LogOut,
 } from "lucide-react";
+import {
+  defaultOnline,
+  defaultPolicies,
+  initialMessages,
+  mergeRoomPresentation,
+  type ApiError,
+  type AdminStats,
+  type AuthForm,
+  type AuthMode,
+  type AuthResponse,
+  type AuthUser,
+  type BootstrapModel,
+  type BootstrapPolicies,
+  type ChatMessage,
+  type MessageCreatePayload,
+  type MessageCreateResult,
+  type ModeId,
+  type OnlineSnapshot,
+  type RoomId,
+  type RoomPresentation,
+} from "./model";
 import "./styles.css";
 
-type ModeId = "home" | "word" | "excel" | "ppt" | "ps";
-type RoomId = Exclude<ModeId, "home">;
-
-type Message = {
-  id: number;
-  room: RoomId;
-  name: string;
-  text: string;
-  time: string;
-  tag?: string;
-};
-
-type AuthUser = {
-  id: string;
-  username: string;
-  displayName: string;
-};
-
 type ServerToClientEvents = {
-  "message:new": (message: Message) => void;
-  "online:update": (online: Partial<Record<RoomId, number>>) => void;
+  "message:new": (message: ChatMessage) => void;
+  "online:update": (online: OnlineSnapshot) => void;
 };
 
 type ClientToServerEvents = {
   "room:join": (room: RoomId) => void;
   "message:create": (
-    payload: Pick<Message, "room" | "name" | "text"> & { tag?: string },
-    acknowledge?: (result: { ok: boolean; error?: string; message?: Message }) => void,
+    payload: MessageCreatePayload,
+    acknowledge?: (result: MessageCreateResult) => void,
   ) => void;
 };
-
-const rooms: Record<RoomId, { title: string; file: string; subtitle: string }> = {
-  word: {
-    title: "闲聊大厅",
-    file: "工作汇报.docx",
-    subtitle: "文档协作人数",
-  },
-  excel: {
-    title: "话题分区广场",
-    file: "数据统计表.xlsx",
-    subtitle: "表格协作人数",
-  },
-  ppt: {
-    title: "趣味内容广场",
-    file: "会议材料.pptx",
-    subtitle: "演示浏览人数",
-  },
-  ps: {
-    title: "设计专属聊天室",
-    file: "视觉方案.psd",
-    subtitle: "画布浏览人数",
-  },
-};
-
-const seedMessages: Message[] = [
-  { id: 1, room: "word", name: "匿名锦鲤", text: "今天的日报已经写到像年度总结了。", time: "10:18", tag: "游水" },
-  { id: 2, room: "word", name: "临时协作者", text: "有没有三分钟恢复精神的办法，除了下班。", time: "10:21", tag: "树洞" },
-  { id: 3, room: "excel", name: "A17", text: "午饭投票：麻辣烫 3 票，轻食 0 票。", time: "10:27", tag: "美食" },
-  { id: 4, room: "excel", name: "C04", text: "推荐一个周末短剧，节奏快，不费脑。", time: "10:29", tag: "影视" },
-  { id: 5, room: "ppt", name: "第 6 页备注", text: "新表情包已喂鱼：老板说简单改改系列。", time: "10:32", tag: "喂鱼" },
-  { id: 6, room: "ps", name: "图层 12", text: "甲方说要高级灰，但不要灰。", time: "10:35", tag: "甲方" },
-  { id: 7, room: "ps", name: "蒙版用户", text: "有无免费商用字体清单，救一下交付。", time: "10:41", tag: "素材" },
-];
 
 const topics = ["摸鱼段子", "美食分享", "影视推荐", "职场树洞", "日常好物", "下班倒计时"];
 const quickTools = ["牛维斯摆烂规划", "扫雷", "华容道", "松弛文案", "表情包库"];
 
 function App() {
   const [mode, setMode] = useState<ModeId>("home");
-  const [messages, setMessages] = useState(seedMessages);
+  const [rooms, setRooms] = useState<Record<RoomId, RoomPresentation>>(() => mergeRoomPresentation());
+  const [messages, setMessages] = useState(initialMessages);
   const [socket, setSocket] = useState<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
-  const [online, setOnline] = useState<Partial<Record<RoomId, number>>>({});
-  const [nickname, setNickname] = useState("匿名小鱼");
+  const [online, setOnline] = useState<OnlineSnapshot>({});
+  const [nickname, setNickname] = useState("未登录");
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [authMode, setAuthMode] = useState<"login" | "register">("login");
-  const [authForm, setAuthForm] = useState({ username: "", displayName: "", password: "" });
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
+  const [authForm, setAuthForm] = useState<AuthForm>({ username: "", displayName: "", password: "" });
   const [authError, setAuthError] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
   const [draft, setDraft] = useState("");
   const [sendError, setSendError] = useState("");
+  const [policies, setPolicies] = useState<BootstrapPolicies>(defaultPolicies);
   const [privateMode, setPrivateMode] = useState(false);
   const [now, setNow] = useState(new Date());
 
-  const activeRoom = mode === "home" ? undefined : rooms[mode];
+  const activeRoom = mode === "home" || mode === "admin" ? undefined : rooms[mode];
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
@@ -130,11 +104,13 @@ function App() {
   useEffect(() => {
     let mounted = true;
     fetch("/api/bootstrap")
-      .then((response) => response.json())
+      .then((response) => response.json() as Promise<BootstrapModel>)
       .then((data) => {
         if (!mounted) return;
         if (Array.isArray(data.messages)) setMessages(data.messages);
+        if (data.rooms) setRooms(mergeRoomPresentation(data.rooms));
         if (data.online) setOnline(data.online);
+        if (data.policies) setPolicies({ ...defaultPolicies, ...data.policies });
         if (data.user) {
           setUser(data.user);
           setNickname(data.user.displayName);
@@ -155,7 +131,7 @@ function App() {
       mounted = false;
       nextSocket.disconnect();
     };
-  }, []);
+  }, [user?.id]);
 
   const submitAuth = async () => {
     setAuthBusy(true);
@@ -166,7 +142,7 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(authForm),
       });
-      const result = await response.json();
+      const result = (await response.json()) as AuthResponse;
       if (!response.ok || !result.user) {
         setAuthError(authErrorText(result.error));
         return;
@@ -182,9 +158,11 @@ function App() {
   };
 
   const logout = async () => {
+    socket?.disconnect();
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    setSocket(null);
     setUser(null);
-    setNickname("匿名小鱼");
+    setNickname("未登录");
   };
 
   useEffect(() => {
@@ -193,7 +171,7 @@ function App() {
   }, [activeRoom]);
 
   useEffect(() => {
-    if (mode !== "home") socket?.emit("room:join", mode);
+    if (mode !== "home" && mode !== "admin") socket?.emit("room:join", mode);
   }, [mode, socket]);
 
   useEffect(() => {
@@ -223,12 +201,16 @@ function App() {
   }, []);
 
   const visibleMessages = useMemo(() => {
-    if (mode === "home") return [];
+    if (mode === "home" || mode === "admin") return [];
     return messages.filter((message) => message.room === mode);
   }, [messages, mode]);
 
   const sendMessage = () => {
-    if (mode === "home" || !draft.trim()) return;
+    if (mode === "home" || mode === "admin" || !draft.trim()) return;
+    if (!user) {
+      setSendError("登录后才能发言。");
+      return;
+    }
     const text = draft.trim();
     setSendError("");
     setDraft("");
@@ -238,28 +220,25 @@ function App() {
         "message:create",
         {
           room: mode,
-          name: nickname || "匿名小鱼",
           text,
           tag: mode === "ps" ? "图层" : "游水",
         },
         (result) => {
-          if (!result.ok) setSendError(errorText(result.error));
+          if (!result.ok) {
+            if (result.error === "login_required") {
+              setUser(null);
+              setNickname("未登录");
+              socket.disconnect();
+            }
+            setSendError(errorText(result.error));
+          }
         },
       );
       return;
     }
 
-    setMessages((current) => [
-      ...current,
-      {
-        id: Date.now(),
-        room: mode,
-        name: nickname || "匿名小鱼",
-        text,
-        time: now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
-        tag: mode === "ps" ? "图层" : "游水",
-      },
-    ]);
+    setDraft(text);
+    setSendError("实时服务连接中，请稍后再发。");
   };
 
   return (
@@ -278,14 +257,18 @@ function App() {
           onLogout={logout}
           onEnter={setMode}
         />
+      ) : mode === "admin" ? (
+        <AdminDashboard now={now} user={user} onMode={setMode} onLogout={logout} />
       ) : (
         <Workspace
           mode={mode}
+          rooms={rooms}
           now={now}
           messages={visibleMessages}
           nickname={nickname}
           draft={draft}
           online={online}
+          policies={policies}
           sendError={sendError}
           privateMode={privateMode}
           user={user}
@@ -316,12 +299,12 @@ function Home({
 }: {
   now: Date;
   user: AuthUser | null;
-  authMode: "login" | "register";
-  authForm: { username: string; displayName: string; password: string };
+  authMode: AuthMode;
+  authForm: AuthForm;
   authError: string;
   authBusy: boolean;
-  onAuthMode: (mode: "login" | "register") => void;
-  onAuthForm: (form: { username: string; displayName: string; password: string }) => void;
+  onAuthMode: (mode: AuthMode) => void;
+  onAuthForm: (form: AuthForm) => void;
   onSubmitAuth: () => void;
   onLogout: () => void;
   onEnter: (mode: ModeId) => void;
@@ -360,6 +343,16 @@ function Home({
             <div>
               <strong>设计职员模式</strong>
               <span>专业设计工作台</span>
+            </div>
+            <ChevronRight size={20} />
+          </button>
+          <button className="launch-card" onClick={() => onEnter("admin")}>
+            <div className="launch-icon admin-icon">
+              <BarChart3 size={34} />
+            </div>
+            <div>
+              <strong>后端控制平台</strong>
+              <span>注册、活跃与消息运营指标</span>
             </div>
             <ChevronRight size={20} />
           </button>
@@ -415,12 +408,12 @@ function AuthPanel({
   onLogout,
 }: {
   user: AuthUser | null;
-  mode: "login" | "register";
-  form: { username: string; displayName: string; password: string };
+  mode: AuthMode;
+  form: AuthForm;
   error: string;
   busy: boolean;
-  onMode: (mode: "login" | "register") => void;
-  onForm: (form: { username: string; displayName: string; password: string }) => void;
+  onMode: (mode: AuthMode) => void;
+  onForm: (form: AuthForm) => void;
   onSubmit: () => void;
   onLogout: () => void;
 }) {
@@ -436,7 +429,7 @@ function AuthPanel({
         </div>
         <div className="account-meter">
           <span>账户状态</span>
-          <strong>已登录</strong>
+          <strong>{user.isAdmin ? "管理员" : "已登录"}</strong>
         </div>
         <button className="auth-submit secondary" onClick={onLogout}>
           <LogOut size={16} />
@@ -503,11 +496,238 @@ function AuthPanel({
   );
 }
 
-function Workspace(props: {
-  mode: Exclude<ModeId, "home">;
+function AdminDashboard({
+  now,
+  user,
+  onMode,
+  onLogout,
+}: {
   now: Date;
-  messages: Message[];
-  online: Partial<Record<RoomId, number>>;
+  user: AuthUser | null;
+  onMode: (mode: ModeId) => void;
+  onLogout: () => void;
+}) {
+  const [stats, setStats] = useState<AdminStats | null>(null);
+  const [error, setError] = useState("");
+  const peakMessages = Math.max(1, ...(stats?.messagesByHour.map((item) => item.count) || [1]));
+  const peakRegistrations = Math.max(1, ...(stats?.registrationsByDay.map((item) => item.count) || [1]));
+
+  useEffect(() => {
+    if (!user) return;
+    let mounted = true;
+    const loadStats = () => {
+      fetch("/api/admin/stats")
+        .then((response) => response.json())
+        .then((result) => {
+          if (!mounted) return;
+          if (!result.stats) {
+            setError(errorText(result.error));
+            return;
+          }
+          setStats(result.stats);
+          setError("");
+        })
+        .catch(() => {
+          if (mounted) setError("控制台服务暂时不可用。");
+        });
+    };
+    loadStats();
+    const timer = window.setInterval(loadStats, 15000);
+    return () => {
+      mounted = false;
+      window.clearInterval(timer);
+    };
+  }, [user]);
+
+  return (
+    <main className="admin-shell">
+      <header className="admin-topbar">
+        <div className="admin-title">
+          <button className="icon-button" onClick={() => onMode("home")} title="返回工作台">
+            <ChevronLeft size={17} />
+          </button>
+          <div>
+            <h1>后端控制平台</h1>
+            <p>注册、活跃、在线与消息运营状态</p>
+          </div>
+        </div>
+        <div className="admin-actions">
+          <SystemStatus now={now} compact />
+          {user && (
+            <button className="account-inline" onClick={onLogout}>
+              <LogOut size={15} />
+              退出 @{user.username}
+            </button>
+          )}
+        </div>
+      </header>
+
+      {!user ? (
+        <section className="admin-empty">
+          <ShieldCheck size={28} />
+          <strong>登录后查看控制台</strong>
+          <button className="auth-submit" onClick={() => onMode("home")}>去登录</button>
+        </section>
+      ) : !user.isAdmin ? (
+        <section className="admin-empty">
+          <ShieldCheck size={28} />
+          <strong>需要管理员权限</strong>
+          <span>当前账户不能查看运营控制台</span>
+          <button className="auth-submit secondary" onClick={() => onMode("home")}>返回工作台</button>
+        </section>
+      ) : error ? (
+        <section className="admin-empty">
+          <ShieldCheck size={28} />
+          <strong>{error}</strong>
+        </section>
+      ) : !stats ? (
+        <section className="admin-empty">
+          <Activity size={28} />
+          <strong>正在读取运营数据</strong>
+        </section>
+      ) : (
+        <section className="admin-content">
+          <div className="metric-grid">
+            <MetricCard label="注册用户" value={stats.totals.users} detail="账户总数" />
+            <MetricCard label="24 小时活跃" value={stats.activity.activeUsers24h} detail="有会话访问的用户" />
+            <MetricCard label="实时在线" value={stats.totals.onlineSockets} detail="当前房间连接数" />
+            <MetricCard label="今日消息" value={stats.activity.messagesToday} detail={`近 1 小时 ${stats.activity.messagesLastHour}`} />
+          </div>
+
+          <div className="admin-grid">
+            <section className="admin-panel">
+              <div className="panel-heading">
+                <strong>实时活跃度</strong>
+                <span>{new Date(stats.generatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</span>
+              </div>
+              <div className="activity-list">
+                <AdminFact label="15 分钟活跃用户" value={stats.activity.activeUsers15m} />
+                <AdminFact label="有效会话" value={stats.totals.activeSessions} />
+                <AdminFact label="今日新增会话" value={stats.activity.sessionsCreatedToday} />
+                <AdminFact label="消息总量" value={stats.totals.messages} />
+              </div>
+            </section>
+
+            <section className="admin-panel">
+              <div className="panel-heading">
+                <strong>房间分布</strong>
+                <span>在线 / 消息</span>
+              </div>
+              <div className="room-stat-list">
+                {stats.rooms.map((room) => (
+                  <div key={room.id} className="room-stat-row">
+                    <span>{room.label}</span>
+                    <strong>{room.online}</strong>
+                    <small>{room.messages} 条</small>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="admin-panel wide">
+              <div className="panel-heading">
+                <strong>近 12 小时消息</strong>
+                <span>按小时</span>
+              </div>
+              <div className="bar-chart">
+                {stats.messagesByHour.map((item) => (
+                  <div key={item.hour} className="bar-item">
+                    <div style={{ height: `${Math.max(8, (item.count / peakMessages) * 100)}%` }} />
+                    <span>{item.hour}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="admin-panel">
+              <div className="panel-heading">
+                <strong>近 7 天注册</strong>
+                <span>账户创建</span>
+              </div>
+              <div className="mini-bars">
+                {stats.registrationsByDay.map((item) => (
+                  <div key={item.date}>
+                    <span>{item.date.slice(5)}</span>
+                    <b style={{ width: `${Math.max(8, (item.count / peakRegistrations) * 100)}%` }} />
+                    <strong>{item.count}</strong>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="admin-panel">
+              <div className="panel-heading">
+                <strong>最新消息</strong>
+                <span>最近 8 条</span>
+              </div>
+              <div className="latest-list">
+                {stats.latestMessages.map((message) => (
+                  <div key={message.id}>
+                    <strong>{message.name}</strong>
+                    <span>{message.text}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="admin-panel wide">
+              <div className="panel-heading">
+                <strong>最近注册用户</strong>
+                <span>角色 / 会话</span>
+              </div>
+              <div className="user-table">
+                <div className="user-row head">
+                  <span>用户</span>
+                  <span>角色</span>
+                  <span>注册时间</span>
+                  <span>有效会话</span>
+                </div>
+                {stats.recentUsers.map((item) => (
+                  <div key={item.id} className="user-row">
+                    <span>
+                      <strong>{item.displayName}</strong>
+                      <small>@{item.username}</small>
+                    </span>
+                    <span>{item.isAdmin ? "管理员" : "成员"}</span>
+                    <span>{new Date(item.createdAt).toLocaleDateString("zh-CN")}</span>
+                    <span>{item.activeSessions}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        </section>
+      )}
+    </main>
+  );
+}
+
+function MetricCard({ label, value, detail }: { label: string; value: number; detail: string }) {
+  return (
+    <div className="metric-card">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{detail}</small>
+    </div>
+  );
+}
+
+function AdminFact({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function Workspace(props: {
+  mode: RoomId;
+  rooms: Record<RoomId, RoomPresentation>;
+  now: Date;
+  messages: ChatMessage[];
+  online: OnlineSnapshot;
+  policies: BootstrapPolicies;
   nickname: string;
   draft: string;
   sendError: string;
@@ -520,8 +740,8 @@ function Workspace(props: {
   onPrivacy: () => void;
   onLogout: () => void;
 }) {
-  const room = rooms[props.mode];
-  const online = props.online[props.mode] ?? 19 + props.mode.length * 3;
+  const room = props.rooms[props.mode];
+  const online = props.online[props.mode] ?? defaultOnline(props.mode);
 
   return (
     <main className={`workspace workspace-${props.mode}`}>
@@ -558,12 +778,12 @@ function Workspace(props: {
               <UsersRound size={18} />
             </div>
             <label className="field-label">
-              {props.user ? "账户昵称" : "临时昵称"}
+              {props.user ? "账户昵称" : "发言身份"}
               <input
-                value={props.user?.displayName || props.nickname}
+                value={props.user?.displayName || "未登录"}
                 onChange={(event) => props.onNickname(event.target.value)}
                 maxLength={12}
-                disabled={Boolean(props.user)}
+                disabled
               />
             </label>
             {props.user && (
@@ -580,16 +800,25 @@ function Workspace(props: {
             <div className="compose-row">
               <input
                 value={props.draft}
-                placeholder="输入协作备注..."
+                maxLength={props.policies.maxMessageLength}
+                placeholder={props.user ? "输入协作备注..." : "登录后才能发言"}
                 onChange={(event) => props.onDraft(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") props.onSend();
                 }}
+                disabled={!props.user}
               />
-              <button className="send-button" onClick={props.onSend} title="发送">
+              <button className="send-button" onClick={props.onSend} title="发送" disabled={!props.user}>
                 <Send size={17} />
               </button>
             </div>
+            {!props.user && (
+              <div className="login-required">
+                <ShieldCheck size={15} />
+                <span>登录账户后才能发言</span>
+                <button onClick={() => props.onMode("home")}>去登录</button>
+              </div>
+            )}
             {props.sendError && <p className="send-error">{props.sendError}</p>}
           </aside>
         )}
@@ -605,18 +834,25 @@ function Workspace(props: {
   );
 }
 
-function errorText(error?: string) {
+function errorText(error?: ApiError) {
+  if (error === "login_required") return "登录后才能发言。";
+  if (error === "admin_required") return "需要管理员权限。";
   if (error === "blocked_content") return "这条内容触发了安全过滤，换个说法再发。";
   if (error === "empty_message") return "协作备注不能为空。";
+  if (error === "invalid_room") return "这个聊天室暂不可用。";
   return "发送失败，请稍后再试。";
 }
 
-function authErrorText(error?: string) {
+function authErrorText(error?: ApiError) {
   if (error === "invalid_username") return "用户名至少 3 个字符。";
   if (error === "invalid_display_name") return "昵称不能为空。";
-  if (error === "weak_password") return "密码至少 6 位。";
+  if (error === "weak_password") return "密码至少 10 位，并包含大小写字母、数字或符号中的三类。";
+  if (error === "password_too_long") return "密码太长，请控制在 128 位以内。";
+  if (error === "password_contains_username") return "密码不能包含用户名。";
+  if (error === "common_password") return "这个密码太常见，请换一个更安全的。";
   if (error === "username_taken") return "这个用户名已经被占用。";
   if (error === "invalid_credentials") return "用户名或密码不正确。";
+  if (error === "rate_limited") return "尝试次数过多，请稍后再试。";
   return "账户操作失败，请稍后再试。";
 }
 
@@ -626,7 +862,7 @@ function Toolbar({
   onPrivacy,
   privateMode,
 }: {
-  mode: Exclude<ModeId, "home">;
+  mode: RoomId;
   onMode: (mode: ModeId) => void;
   onPrivacy: () => void;
   privateMode: boolean;
@@ -663,7 +899,7 @@ function Toolbar({
   );
 }
 
-function WordCanvas({ messages, privateMode }: { messages: Message[]; privateMode: boolean }) {
+function WordCanvas({ messages, privateMode }: { messages: ChatMessage[]; privateMode: boolean }) {
   return (
     <section className="document-stage">
       <div className="ruler horizontal" />
@@ -690,7 +926,7 @@ function WordCanvas({ messages, privateMode }: { messages: Message[]; privateMod
   );
 }
 
-function ExcelCanvas({ messages, privateMode }: { messages: Message[]; privateMode: boolean }) {
+function ExcelCanvas({ messages, privateMode }: { messages: ChatMessage[]; privateMode: boolean }) {
   return (
     <section className="sheet-stage">
       <div className="formula-bar">fx&nbsp;&nbsp;=WORKDAY_STATUS()</div>
@@ -713,7 +949,7 @@ function ExcelCanvas({ messages, privateMode }: { messages: Message[]; privateMo
   );
 }
 
-function PptCanvas({ messages, privateMode }: { messages: Message[]; privateMode: boolean }) {
+function PptCanvas({ messages, privateMode }: { messages: ChatMessage[]; privateMode: boolean }) {
   return (
     <section className="ppt-stage">
       <aside className="slide-list">
@@ -741,7 +977,7 @@ function PptCanvas({ messages, privateMode }: { messages: Message[]; privateMode
   );
 }
 
-function PsCanvas({ messages, privateMode }: { messages: Message[]; privateMode: boolean }) {
+function PsCanvas({ messages, privateMode }: { messages: ChatMessage[]; privateMode: boolean }) {
   return (
     <section className="ps-stage">
       <aside className="ps-tools">
