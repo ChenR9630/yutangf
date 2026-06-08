@@ -1014,6 +1014,12 @@ p {
   font-size: 12px;
 }
 
+.field-hint {
+  color: #607286;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .field-label input,
 .compose-row input {
   width: 100%;
@@ -1047,6 +1053,10 @@ p {
 .theme-dark .field-label input:disabled {
   color: #b8c4cf;
   background: #2a3038;
+}
+
+.theme-dark .field-hint {
+  color: #aebbc7;
 }
 
 .theme-dark .compose-row input:disabled {

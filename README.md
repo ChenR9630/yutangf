@@ -32,6 +32,19 @@ npm start
 
 账户使用 SQLite 持久化到 `data/auth.sqlite`，登录 session 也保存在同一个数据库中。首次启动会自动把旧的 `data/users.json` 用户迁移到 SQLite。
 
+### 豆包 AI 自动回复
+
+服务器支持接入火山方舟豆包模型，在房间在线人数较少时由“塘小逗”自动接一句轻松回复。默认未配置密钥时不会启用。
+
+可用环境变量：
+
+- `DOUBAO_API_KEY` 或 `ARK_API_KEY`：火山方舟 API Key
+- `DOUBAO_MODEL` 或 `ARK_MODEL`：方舟推理接入点 ID，通常是 `ep-...`
+- `DOUBAO_BASE_URL`：接口地址，默认 `https://ark.cn-beijing.volces.com/api/v3`
+- `YUTANG_AI_NAME`：AI 昵称，默认 `塘小逗`
+- `YUTANG_AI_ONLINE_THRESHOLD`：房间在线人数小于等于该值时触发，默认 `2`
+- `YUTANG_AI_COOLDOWN_MS`：单个房间自动回复冷却时间，默认 `45000`
+
 ## 部署
 
 生产环境迁移到腾讯云香港轻量应用服务器。推荐使用仓库内的部署脚本：

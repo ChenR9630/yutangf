@@ -480,11 +480,19 @@ function AuthPanel({
           type="password"
           value={form.password}
           autoComplete={mode === "login" ? "current-password" : "new-password"}
+          minLength={mode === "register" ? 10 : undefined}
+          maxLength={128}
+          aria-describedby={mode === "register" ? "register-password-hint" : undefined}
           onChange={(event) => onForm({ ...form, password: event.target.value })}
           onKeyDown={(event) => {
             if (event.key === "Enter") onSubmit();
           }}
         />
+        {mode === "register" && (
+          <span id="register-password-hint" className="field-hint">
+            至少 10 位，须包含大写字母、小写字母、数字和符号。
+          </span>
+        )}
       </label>
       {error && <p className="send-error">{error}</p>}
       <button className="auth-submit" onClick={onSubmit} disabled={busy}>
@@ -845,7 +853,7 @@ function errorText(error?: ApiError) {
 function authErrorText(error?: ApiError) {
   if (error === "invalid_username") return "用户名至少 3 个字符。";
   if (error === "invalid_display_name") return "昵称不能为空。";
-  if (error === "weak_password") return "密码至少 10 位，并包含大小写字母、数字或符号中的三类。";
+  if (error === "weak_password") return "密码至少 10 位，须包含大写字母、小写字母、数字和符号。";
   if (error === "password_too_long") return "密码太长，请控制在 128 位以内。";
   if (error === "password_contains_username") return "密码不能包含用户名。";
   if (error === "common_password") return "这个密码太常见，请换一个更安全的。";

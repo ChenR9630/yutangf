@@ -20,6 +20,13 @@ const distDir = path.join(rootDir, "dist");
 const indexPath = path.join(distDir, "index.html");
 const port = Number(process.env.PORT || 8787);
 const sessionTtlMs = 1000 * 60 * 60 * 24 * 14;
+const aiName = process.env.YUTANG_AI_NAME || "塘小逗";
+const aiTag = process.env.YUTANG_AI_TAG || "冒泡";
+const aiOnlineThreshold = Number(process.env.YUTANG_AI_ONLINE_THRESHOLD || 2);
+const aiCooldownMs = Number(process.env.YUTANG_AI_COOLDOWN_MS || 45_000);
+const doubaoBaseUrl = String(process.env.DOUBAO_BASE_URL || "https://ark.cn-beijing.volces.com/api/v3").replace(/\/$/, "");
+const doubaoApiKey = process.env.DOUBAO_API_KEY || process.env.ARK_API_KEY || "";
+const doubaoModel = process.env.DOUBAO_MODEL || process.env.ARK_MODEL || "";
 
 const rooms = ["word", "excel", "ppt", "ps"];
 const roomLabels = {
@@ -50,6 +57,8 @@ ensureInitialAdmin();
 let saveTimer;
 const rateLimitBuckets = new Map();
 const onlineByRoom = new Map(rooms.map((room) => [room, new Set()]));
+const aiCooldownByRoom = new Map();
+const aiPendingRooms = new Set();
 
 const app = express();
 const server = http.createServer(app);
@@ -115,12 +124,6 @@ app.post("/api/auth/register", async (request, response) => {
   const username = normalizeUsername(request.body?.username);
   const displayName = sanitizeText(request.body?.displayName || username).slice(0, 12);
   const password = String(request.body?.password || "");
-  const rateLimit = consumeRateLimit(request, "register", username, 5, 15 * 60 * 1000);
-
-  if (!rateLimit.ok) {
-    response.status(429).json({ ok: false, error: "rate_limited", retryAfter: rateLimit.retryAfter });
-    return;
-  }
 
   if (!username || username.length < 3) {
     response.status(400).json({ ok: false, error: "invalid_username" });
@@ -137,6 +140,12 @@ app.post("/api/auth/register", async (request, response) => {
   }
   if (getUserByUsername(username)) {
     response.status(409).json({ ok: false, error: "username_taken" });
+    return;
+  }
+
+  const rateLimit = consumeRateLimit(request, "register", username, 5, 15 * 60 * 1000);
+  if (!rateLimit.ok) {
+    response.status(429).json({ ok: false, error: "rate_limited", retryAfter: rateLimit.retryAfter });
     return;
   }
 
@@ -226,10 +235,10 @@ io.on("connection", (socket) => {
       acknowledge?.(result);
       return;
     }
-    messages = [...messages, result.message].slice(-maxMessagesPerRoom * rooms.length);
-    scheduleSave();
+    appendMessage(result.message);
     io.to(result.message.room).emit("message:new", result.message);
     acknowledge?.({ ok: true, message: result.message });
+    maybeReplyWithAi(result.message);
   });
 
   socket.on("disconnect", () => {
@@ -277,6 +286,114 @@ function createMessage(payload = {}, user) {
       time: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }),
     },
   };
+}
+
+function appendMessage(message) {
+  messages = [...messages, message].slice(-maxMessagesPerRoom * rooms.length);
+  scheduleSave();
+}
+
+function maybeReplyWithAi(message) {
+  if (!isAiEnabled()) return;
+  if (!rooms.includes(message.room) || message.name === aiName) return;
+  if ((onlineByRoom.get(message.room)?.size || 0) > aiOnlineThreshold) return;
+
+  const now = Date.now();
+  if ((aiCooldownByRoom.get(message.room) || 0) > now) return;
+  if (aiPendingRooms.has(message.room)) return;
+
+  aiPendingRooms.add(message.room);
+  aiCooldownByRoom.set(message.room, now + aiCooldownMs);
+  setTimeout(() => {
+    createAiReply(message).catch((error) => {
+      console.warn("[doubao-ai]", error?.message || error);
+    }).finally(() => {
+      aiPendingRooms.delete(message.room);
+    });
+  }, 1200);
+}
+
+function isAiEnabled() {
+  return Boolean(doubaoApiKey && doubaoModel);
+}
+
+async function createAiReply(triggerMessage) {
+  const text = await generateDoubaoReply(triggerMessage);
+  if (!text) return;
+
+  const message = {
+    id: Date.now() + 1,
+    room: triggerMessage.room,
+    name: aiName,
+    text: sanitizeText(text).slice(0, 160),
+    tag: aiTag,
+    time: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }),
+  };
+
+  if (!message.text.trim()) return;
+  if (blockedWords.some((word) => message.text.includes(word))) return;
+
+  appendMessage(message);
+  io.to(message.room).emit("message:new", message);
+}
+
+async function generateDoubaoReply(triggerMessage) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12_000);
+
+  try {
+    const response = await fetch(`${doubaoBaseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${doubaoApiKey}`,
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: doubaoModel,
+        messages: buildAiMessages(triggerMessage),
+        temperature: 0.9,
+        max_tokens: 120,
+      }),
+    });
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      throw new Error(`Doubao API ${response.status}: ${detail.slice(0, 160)}`);
+    }
+
+    const data = await response.json();
+    return String(data?.choices?.[0]?.message?.content || "").trim();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function buildAiMessages(triggerMessage) {
+  const roomMessages = messages
+    .filter((item) => item.room === triggerMessage.room)
+    .slice(-8)
+    .map((item) => ({
+      role: item.name === aiName ? "assistant" : "user",
+      content: `${item.name}：${item.text}`,
+    }));
+
+  return [
+    {
+      role: "system",
+      content: [
+        `你是鱼塘社区里的 AI 气氛同事，名字叫${aiName}。`,
+        "当房间人少或冷场时，你会依据最近聊天接一句有趣、轻松、短小的中文回复。",
+        "风格像办公室摸鱼搭子：机灵但不油腻，不说教，不营销，不提自己是大模型。",
+        "每次只回 1 句，控制在 60 字以内，可以带轻微谐音梗，但不要刷屏。",
+      ].join(""),
+    },
+    ...roomMessages,
+    {
+      role: "user",
+      content: `请接住这条消息，给一个有趣但自然的回复：${triggerMessage.name}：${triggerMessage.text}`,
+    },
+  ];
 }
 
 function sanitizeText(value) {
@@ -407,8 +524,10 @@ function validatePassword(password, username) {
     return { ok: false, error: "password_contains_username" };
   }
 
-  const classes = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter((pattern) => pattern.test(password)).length;
-  if (classes < 3) return { ok: false, error: "weak_password" };
+  const requiredClasses = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/];
+  if (!requiredClasses.every((pattern) => pattern.test(password))) {
+    return { ok: false, error: "weak_password" };
+  }
 
   const common = ["password", "123456", "qwerty", "admin", "letmein", "yutang"];
   if (common.some((item) => password.toLowerCase().includes(item))) {
