@@ -8,6 +8,8 @@ export type ChatMessage = {
   text: string;
   time: string;
   tag?: string;
+  kind?: "text" | "sticker";
+  stickerId?: string;
 };
 
 export type AuthUser = {
@@ -49,6 +51,7 @@ export type ApiError =
   | "invalid_credentials"
   | "invalid_display_name"
   | "invalid_room"
+  | "invalid_sticker"
   | "invalid_username"
   | "admin_required"
   | "login_required"
@@ -69,6 +72,8 @@ export type MessageCreatePayload = {
   room: RoomId;
   text: string;
   tag?: string;
+  kind?: "text" | "sticker";
+  stickerId?: string;
 };
 
 export type MessageCreateResult = {

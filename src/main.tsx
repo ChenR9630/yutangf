@@ -58,6 +58,7 @@ import {
   type RoomId,
   type RoomPresentation,
 } from "./model";
+import { stickerById, stickerCategories, stickers, type StickerCategory } from "./stickers";
 import "./styles.css";
 
 type ServerToClientEvents = {
@@ -241,6 +242,32 @@ function App() {
     setSendError("实时服务连接中，请稍后再发。");
   };
 
+  const sendSticker = (stickerId: string) => {
+    if (mode === "home" || mode === "admin" || !user) {
+      setSendError("登录后才能发表情。");
+      return;
+    }
+    const sticker = stickerById[stickerId];
+    if (!sticker || !socket?.connected) {
+      setSendError("实时服务连接中，请稍后再发。");
+      return;
+    }
+    setSendError("");
+    socket.emit(
+      "message:create",
+      {
+        room: mode,
+        text: sticker.label,
+        tag: "表情",
+        kind: "sticker",
+        stickerId,
+      },
+      (result) => {
+        if (!result.ok) setSendError(errorText(result.error));
+      },
+    );
+  };
+
   return (
     <div className={`app ${mode === "ps" ? "theme-dark" : "theme-office"}`}>
       {mode === "home" || (mode === "admin" && !user?.isAdmin) ? (
@@ -276,6 +303,7 @@ function App() {
           onNickname={setNickname}
           onDraft={setDraft}
           onSend={sendMessage}
+          onSendSticker={sendSticker}
           onPrivacy={() => setPrivateMode((value) => !value)}
           onLogout={logout}
         />
@@ -744,11 +772,23 @@ function Workspace(props: {
   onNickname: (value: string) => void;
   onDraft: (value: string) => void;
   onSend: () => void;
+  onSendSticker: (stickerId: string) => void;
   onPrivacy: () => void;
   onLogout: () => void;
 }) {
   const room = props.rooms[props.mode];
   const online = props.online[props.mode] ?? defaultOnline(props.mode);
+  const [stickerPanelOpen, setStickerPanelOpen] = useState(false);
+  const [stickerCategory, setStickerCategory] = useState<"全部" | StickerCategory>("全部");
+  const [stickerQuery, setStickerQuery] = useState("");
+  const filteredStickers = useMemo(() => {
+    const query = stickerQuery.trim().toLowerCase();
+    return stickers.filter((sticker) => {
+      const matchesCategory = stickerCategory === "全部" || sticker.category === stickerCategory;
+      const haystack = [sticker.label, sticker.caption, ...sticker.keywords].join(" ").toLowerCase();
+      return matchesCategory && (!query || haystack.includes(query));
+    });
+  }, [stickerCategory, stickerQuery]);
 
   return (
     <main className={`workspace workspace-${props.mode}`}>
@@ -801,10 +841,23 @@ function Workspace(props: {
             )}
             <div className="topic-chips">
               {(props.mode === "excel" ? topics : quickTools).map((topic) => (
-                <button key={topic}>{topic}</button>
+                <button
+                  key={topic}
+                  onClick={topic === "表情包库" ? () => setStickerPanelOpen((value) => !value) : undefined}
+                >
+                  {topic}
+                </button>
               ))}
             </div>
             <div className="compose-row">
+              <button
+                className={stickerPanelOpen ? "sticker-toggle active" : "sticker-toggle"}
+                onClick={() => setStickerPanelOpen((value) => !value)}
+                title="表情包库"
+                disabled={!props.user}
+              >
+                <Image size={17} />
+              </button>
               <input
                 value={props.draft}
                 maxLength={props.policies.maxMessageLength}
@@ -819,6 +872,51 @@ function Workspace(props: {
                 <Send size={17} />
               </button>
             </div>
+            {stickerPanelOpen && props.user && (
+              <section className="sticker-picker" aria-label="表情包库">
+                <div className="sticker-picker-head">
+                  <strong>鱼塘表情包</strong>
+                  <span>{stickers.length} 个</span>
+                </div>
+                <label className="sticker-search">
+                  <Search size={14} />
+                  <input
+                    value={stickerQuery}
+                    onChange={(event) => setStickerQuery(event.target.value)}
+                    placeholder="搜梗、情绪或场景"
+                  />
+                </label>
+                <div className="sticker-tabs">
+                  {stickerCategories.map((category) => (
+                    <button
+                      key={category}
+                      className={category === stickerCategory ? "active" : ""}
+                      onClick={() => setStickerCategory(category)}
+                    >
+                      {category}
+                    </button>
+                  ))}
+                </div>
+                <div className="sticker-grid">
+                  {filteredStickers.map((sticker) => (
+                    <button
+                      key={sticker.id}
+                      className={`sticker-option tone-${sticker.tone}`}
+                      onClick={() => {
+                        props.onSendSticker(sticker.id);
+                        setStickerPanelOpen(false);
+                      }}
+                      title={sticker.caption}
+                    >
+                      <span className="sticker-emoji">{sticker.emoji}</span>
+                      <strong>{sticker.label}</strong>
+                      <small>{sticker.caption}</small>
+                    </button>
+                  ))}
+                </div>
+                {filteredStickers.length === 0 && <p className="sticker-empty">这片水域暂时没搜到，换个词试试。</p>}
+              </section>
+            )}
             {!props.user && (
               <div className="login-required">
                 <ShieldCheck size={15} />
@@ -847,6 +945,7 @@ function errorText(error?: ApiError) {
   if (error === "blocked_content") return "这条内容触发了安全过滤，换个说法再发。";
   if (error === "empty_message") return "协作备注不能为空。";
   if (error === "invalid_room") return "这个聊天室暂不可用。";
+  if (error === "invalid_sticker") return "这个表情暂不可用，请刷新后重试。";
   return "发送失败，请稍后再试。";
 }
 
@@ -922,7 +1021,7 @@ function WordCanvas({ messages, privateMode }: { messages: ChatMessage[]; privat
                 <p key={message.id}>
                   <span>{message.time}</span>
                   <strong>{message.name}</strong>
-                  {message.text}
+                  <MessageContent message={message} compact />
                 </p>
               ))}
             </div>
@@ -945,7 +1044,7 @@ function ExcelCanvas({ messages, privateMode }: { messages: ChatMessage[]; priva
               {!privateMode && index < messages.length * 2 ? (
                 <>
                   <b>{message?.tag}</b>
-                  <span>{message?.text}</span>
+                  {message && <MessageContent message={message} compact />}
                 </>
               ) : null}
             </div>
@@ -969,7 +1068,7 @@ function PptCanvas({ messages, privateMode }: { messages: ChatMessage[]; private
               <div key={message.id}>
                 <Image size={20} />
                 <strong>{message.tag}</strong>
-                <span>{message.text}</span>
+                <MessageContent message={message} />
               </div>
             ))}
             <div>
@@ -996,7 +1095,7 @@ function PsCanvas({ messages, privateMode }: { messages: ChatMessage[]; privateM
         {!privateMode && messages.map((message, index) => (
           <div key={message.id} className="layer-note" style={{ top: `${22 + index * 19}%`, left: `${18 + index * 9}%` }}>
             <span>{message.name}</span>
-            {message.text}
+            <MessageContent message={message} compact />
           </div>
         ))}
       </div>
@@ -1010,6 +1109,21 @@ function PsCanvas({ messages, privateMode }: { messages: ChatMessage[]; privateM
         ))}
       </aside>
     </section>
+  );
+}
+
+function MessageContent({ message, compact = false }: { message: ChatMessage; compact?: boolean }) {
+  const sticker = message.stickerId ? stickerById[message.stickerId] : undefined;
+  if (message.kind !== "sticker" || !sticker) return <span>{message.text}</span>;
+
+  return (
+    <span className={`message-sticker tone-${sticker.tone}${compact ? " compact" : ""}`}>
+      <span className="message-sticker-emoji">{sticker.emoji}</span>
+      <span>
+        <strong>{sticker.label}</strong>
+        {!compact && <small>{sticker.caption}</small>}
+      </span>
+    </span>
   );
 }
 

@@ -47,6 +47,26 @@ const seedMessages = [
 ];
 
 const blockedWords = ["暴力", "造谣", "人身攻击", "低俗"];
+const stickerLabels = new Map([
+  ["fish-slack", "正在摸鱼：水面平静，水下摸鱼"],
+  ["fish-clock", "下班倒计时：心已下班，人还在线"],
+  ["fish-tea", "喝口水先：大事缓办，小事喝茶"],
+  ["fish-lunch", "干饭要紧：项目可以等，饭点不等人"],
+  ["fish-meeting", "收到开会：人到会场，灵魂稍后加入"],
+  ["fish-change", "简单改改：简单两个字，改到下辈子"],
+  ["fish-overtime", "自愿加班：主打一个自愿被自愿"],
+  ["fish-done", "优雅交付：交付前一秒，依然从容"],
+  ["fish-broken", "小小破防：问题不大，心态重启"],
+  ["fish-speechless", "沉默震耳欲聋：此刻无声胜有声"],
+  ["fish-proud", "拿捏了：区区难题，轻松拿捏"],
+  ["fish-laugh", "笑不活了：今天的功德先笑没一点"],
+  ["fish-watch", "前排吃瓜：瓜已切好，坐等后续"],
+  ["fish-clap", "这波可以：塘里一致通过"],
+  ["fish-question", "你细说：这个话题值得展开一下"],
+  ["fish-hug", "抱抱鱼友：先接住你，再解决问题"],
+  ["fish-respect", "瑞思拜：这操作，鱼塘认证"],
+  ["fish-wow", "还有高手：本以为是池塘，原来是深海"],
+]);
 const maxMessagesPerRoom = 120;
 let messages = await loadMessages();
 await mkdir(dataDir, { recursive: true });
@@ -268,10 +288,14 @@ function createMessage(payload = {}, user) {
   if (!user) return { ok: false, error: "login_required" };
 
   const name = sanitizeText(user.displayName).slice(0, 12) || "已登录用户";
-  const text = sanitizeText(payload.text || "").slice(0, 180);
+  const kind = payload.kind === "sticker" ? "sticker" : "text";
+  const stickerId = kind === "sticker" ? String(payload.stickerId || "") : "";
+  const stickerText = stickerLabels.get(stickerId);
+  const text = sanitizeText(stickerText || payload.text || "").slice(0, 180);
   const tag = sanitizeText(payload.tag || roomDefaultTag(room)).slice(0, 8);
 
   if (!rooms.includes(room)) return { ok: false, error: "invalid_room" };
+  if (kind === "sticker" && !stickerText) return { ok: false, error: "invalid_sticker" };
   if (!text.trim()) return { ok: false, error: "empty_message" };
   if (blockedWords.some((word) => text.includes(word))) return { ok: false, error: "blocked_content" };
 
@@ -283,6 +307,8 @@ function createMessage(payload = {}, user) {
       name,
       text,
       tag,
+      kind,
+      ...(stickerId ? { stickerId } : {}),
       time: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }),
     },
   };
