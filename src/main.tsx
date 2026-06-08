@@ -6,9 +6,11 @@ import {
   BarChart3,
   BellOff,
   Brush,
+  Check,
   ChevronLeft,
   ChevronRight,
   Clock3,
+  Coffee,
   Columns3,
   Copy,
   EyeOff,
@@ -23,9 +25,11 @@ import {
   Palette,
   PanelLeft,
   Presentation,
+  RefreshCw,
   Save,
   Search,
   Send,
+  Share2,
   Settings,
   ShieldCheck,
   Sparkles,
@@ -76,6 +80,34 @@ type ClientToServerEvents = {
 
 const topics = ["摸鱼段子", "美食分享", "影视推荐", "职场树洞", "日常好物", "下班倒计时"];
 const quickTools = ["牛维斯摆烂规划", "扫雷", "华容道", "松弛文案", "表情包库"];
+const slackMoods = ["脑子冒烟", "还能坚持", "心已下班"] as const;
+const slackLoads = ["事情不多", "有点忙", "忙到离谱"] as const;
+
+type SlackMood = typeof slackMoods[number];
+type SlackLoad = typeof slackLoads[number];
+type SlackTask = { time: string; title: string; detail: string };
+type SlackPlan = { score: number; title: string; comment: string; badge: string; tasks: SlackTask[] };
+
+const slackTaskPool: Record<SlackLoad, Array<Omit<SlackTask, "time">>> = {
+  "事情不多": [
+    { title: "战略性巡游", detail: "带着水杯绕工位一圈，顺便确认世界还在运转。" },
+    { title: "桌面考古", detail: "整理三个文件，再郑重地把其中一个改名为“最终版”。" },
+    { title: "窗外调研", detail: "远眺两分钟，给眼睛和脑子同时松个绑。" },
+    { title: "茶水间会晤", detail: "补水并进行一次不超过五分钟的友好交流。" },
+  ],
+  "有点忙": [
+    { title: "五分钟缓存", detail: "暂停新任务五分钟，只处理手头这一件事。" },
+    { title: "Excel 凝视术", detail: "打开正在做的文件，先圈出今天真正要完成的三格。" },
+    { title: "消息静音窗口", detail: "关闭提醒十分钟，给注意力划一块临时保护区。" },
+    { title: "低电量伸展", detail: "离开椅背伸展肩颈，回来后只推进最小一步。" },
+  ],
+  "忙到离谱": [
+    { title: "任务急救分诊", detail: "把任务分成现在、稍后、不归我，先救最要紧的一个。" },
+    { title: "十分钟免打扰", detail: "暂时静音消息，用十分钟结束一个最小交付物。" },
+    { title: "合理求援", detail: "把卡点写成一句话，向最合适的人发出明确求助。" },
+    { title: "下班线保卫战", detail: "删掉一个非必要动作，保住今天最基本的休息时间。" },
+  ],
+};
 
 function App() {
   const [mode, setMode] = useState<ModeId>("home");
@@ -268,6 +300,25 @@ function App() {
     );
   };
 
+  const shareSlackPlan = (text: string) => {
+    if (mode === "home" || mode === "admin" || !user) {
+      setSendError("登录后才能分享计划。");
+      return;
+    }
+    if (!socket?.connected) {
+      setSendError("实时服务连接中，请稍后再分享。");
+      return;
+    }
+    setSendError("");
+    socket.emit(
+      "message:create",
+      { room: mode, text, tag: "摆烂" },
+      (result) => {
+        if (!result.ok) setSendError(errorText(result.error));
+      },
+    );
+  };
+
   return (
     <div className={`app ${mode === "ps" ? "theme-dark" : "theme-office"}`}>
       {mode === "home" || (mode === "admin" && !user?.isAdmin) ? (
@@ -304,6 +355,7 @@ function App() {
           onDraft={setDraft}
           onSend={sendMessage}
           onSendSticker={sendSticker}
+          onShareSlackPlan={shareSlackPlan}
           onPrivacy={() => setPrivateMode((value) => !value)}
           onLogout={logout}
         />
@@ -773,12 +825,14 @@ function Workspace(props: {
   onDraft: (value: string) => void;
   onSend: () => void;
   onSendSticker: (stickerId: string) => void;
+  onShareSlackPlan: (text: string) => void;
   onPrivacy: () => void;
   onLogout: () => void;
 }) {
   const room = props.rooms[props.mode];
   const online = props.online[props.mode] ?? defaultOnline(props.mode);
   const [stickerPanelOpen, setStickerPanelOpen] = useState(false);
+  const [slackPanelOpen, setSlackPanelOpen] = useState(false);
   const [stickerCategory, setStickerCategory] = useState<"全部" | StickerCategory>("全部");
   const [stickerQuery, setStickerQuery] = useState("");
   const filteredStickers = useMemo(() => {
@@ -843,7 +897,19 @@ function Workspace(props: {
               {(props.mode === "excel" ? topics : quickTools).map((topic) => (
                 <button
                   key={topic}
-                  onClick={topic === "表情包库" ? () => setStickerPanelOpen((value) => !value) : undefined}
+                  onClick={
+                    topic === "表情包库"
+                      ? () => {
+                          setSlackPanelOpen(false);
+                          setStickerPanelOpen((value) => !value);
+                        }
+                      : topic === "牛维斯摆烂规划"
+                        ? () => {
+                            setStickerPanelOpen(false);
+                            setSlackPanelOpen((value) => !value);
+                          }
+                        : undefined
+                  }
                 >
                   {topic}
                 </button>
@@ -852,7 +918,10 @@ function Workspace(props: {
             <div className="compose-row">
               <button
                 className={stickerPanelOpen ? "sticker-toggle active" : "sticker-toggle"}
-                onClick={() => setStickerPanelOpen((value) => !value)}
+                onClick={() => {
+                  setSlackPanelOpen(false);
+                  setStickerPanelOpen((value) => !value);
+                }}
                 title="表情包库"
                 disabled={!props.user}
               >
@@ -872,6 +941,15 @@ function Workspace(props: {
                 <Send size={17} />
               </button>
             </div>
+            {slackPanelOpen && props.user && (
+              <SlackPlanner
+                now={props.now}
+                onShare={(text) => {
+                  props.onShareSlackPlan(text);
+                  setSlackPanelOpen(false);
+                }}
+              />
+            )}
             {stickerPanelOpen && props.user && (
               <section className="sticker-picker" aria-label="表情包库">
                 <div className="sticker-picker-head">
@@ -937,6 +1015,190 @@ function Workspace(props: {
       </footer>
     </main>
   );
+}
+
+function SlackPlanner({
+  now,
+  onShare,
+}: {
+  now: Date;
+  onShare: (text: string) => void;
+}) {
+  const [planNow] = useState(() => now);
+  const [mood, setMood] = useState<SlackMood>("脑子冒烟");
+  const [load, setLoad] = useState<SlackLoad>("有点忙");
+  const [offTime, setOffTime] = useState("18:00");
+  const [generation, setGeneration] = useState(0);
+  const [completed, setCompleted] = useState<number[]>([]);
+  const plan = useMemo(
+    () => createSlackPlan(planNow, mood, load, offTime, generation),
+    [generation, load, mood, offTime, planNow],
+  );
+  const allDone = completed.length === plan.tasks.length;
+
+  const regenerate = () => {
+    setGeneration((value) => value + 1);
+    setCompleted([]);
+  };
+
+  const toggleTask = (index: number) => {
+    setCompleted((current) => (
+      current.includes(index) ? current.filter((item) => item !== index) : [...current, index]
+    ));
+  };
+
+  return (
+    <section className="slack-planner" aria-label="牛维斯摆烂规划">
+      <div className="slack-head">
+        <span className="slack-avatar"><Coffee size={22} /></span>
+        <div>
+          <strong>牛维斯摆烂规划</strong>
+          <small>科学喘气，低风险续航</small>
+        </div>
+        <span className="slack-score">{plan.score}</span>
+      </div>
+
+      <div className="slack-control">
+        <span>当前状态</span>
+        <div className="slack-segments">
+          {slackMoods.map((item) => (
+            <button
+              key={item}
+              className={mood === item ? "active" : ""}
+              onClick={() => {
+                setMood(item);
+                setCompleted([]);
+              }}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="slack-control">
+        <span>工作负荷</span>
+        <div className="slack-segments">
+          {slackLoads.map((item) => (
+            <button
+              key={item}
+              className={load === item ? "active" : ""}
+              onClick={() => {
+                setLoad(item);
+                setCompleted([]);
+              }}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <label className="slack-time">
+        <span>计划下班</span>
+        <input
+          type="time"
+          value={offTime}
+          onChange={(event) => {
+            setOffTime(event.target.value);
+            setCompleted([]);
+          }}
+        />
+      </label>
+
+      <div className="slack-summary">
+        <span>今日摆烂指数 {plan.score}</span>
+        <strong>{plan.title}</strong>
+        <p>{plan.comment}</p>
+      </div>
+
+      <div className="slack-tasks">
+        {plan.tasks.map((task, index) => {
+          const isDone = completed.includes(index);
+          return (
+            <button key={`${generation}-${task.time}-${task.title}`} className={isDone ? "slack-task done" : "slack-task"} onClick={() => toggleTask(index)}>
+              <span className="task-check">{isDone ? <Check size={14} /> : index + 1}</span>
+              <span className="task-time">{task.time}</span>
+              <span className="task-copy">
+                <strong>{task.title}</strong>
+                <small>{task.detail}</small>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className={allDone ? "slack-badge earned" : "slack-badge"}>
+        <Sparkles size={15} />
+        <span>{allDone ? `勋章已解锁：${plan.badge}` : `完成三项解锁“${plan.badge}”`}</span>
+      </div>
+
+      <div className="slack-actions">
+        <button onClick={regenerate} title="重新生成">
+          <RefreshCw size={15} />
+          换一套
+        </button>
+        <button
+          className="primary"
+          onClick={() => onShare(formatSlackPlanForChat(plan))}
+          title="分享到当前聊天室"
+        >
+          <Share2 size={15} />
+          分享到鱼塘
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function createSlackPlan(now: Date, mood: SlackMood, load: SlackLoad, offTime: string, generation: number): SlackPlan {
+  const loadScore = { "事情不多": 12, "有点忙": 24, "忙到离谱": 38 }[load];
+  const moodScore = { "还能坚持": 12, "脑子冒烟": 25, "心已下班": 31 }[mood];
+  const score = Math.min(96, 28 + loadScore + moodScore + (generation % 6));
+  const pool = slackTaskPool[load];
+  const start = (generation + mood.length + load.length) % pool.length;
+  const selected = Array.from({ length: 3 }, (_, index) => pool[(start + index) % pool.length]);
+  const times = slackPlanTimes(now, offTime);
+  const titles = score >= 85
+    ? ["建议立即开启省电模式", "今天适合稳住，不适合硬刚"]
+    : score >= 68
+      ? ["可以摆，但要摆得有章法", "给大脑留一点缓存空间"]
+      : ["状态尚可，批准小摆一下", "劳逸结合，水到渠成"];
+  const comments: Record<SlackMood, string> = {
+    "脑子冒烟": "牛维斯建议：先降温，再输出。硬撑不会让进度条跑得更快。",
+    "还能坚持": "牛维斯建议：趁电量尚可，把休息安排进流程，别等自动关机。",
+    "心已下班": "牛维斯建议：身体留在工位，任务缩到最小，灵魂不必强制返岗。",
+  };
+  const badges = load === "忙到离谱"
+    ? ["任务分诊专家", "下班线守门员"]
+    : load === "有点忙"
+      ? ["工位续航大师", "注意力保护员"]
+      : ["战略巡游专员", "带薪呼吸冠军"];
+
+  return {
+    score,
+    title: titles[generation % titles.length],
+    comment: comments[mood],
+    badge: badges[generation % badges.length],
+    tasks: selected.map((task, index) => ({ ...task, time: times[index] })),
+  };
+}
+
+function slackPlanTimes(now: Date, offTime: string) {
+  const [hours, minutes] = offTime.split(":").map(Number);
+  const end = new Date(now);
+  end.setHours(Number.isFinite(hours) ? hours : 18, Number.isFinite(minutes) ? minutes : 0, 0, 0);
+  if (end.getTime() <= now.getTime() + 10 * 60_000) end.setTime(now.getTime() + 2 * 60 * 60_000);
+  const available = end.getTime() - now.getTime();
+  return [0.16, 0.52, 0.86].map((ratio) => {
+    const date = new Date(now.getTime() + available * ratio);
+    return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+  });
+}
+
+function formatSlackPlanForChat(plan: SlackPlan) {
+  const tasks = plan.tasks.map((task) => `${task.time} ${task.title}`).join("；");
+  return `牛维斯今日摆烂计划｜指数 ${plan.score}：${tasks}。完成可解锁“${plan.badge}”。`.slice(0, 180);
 }
 
 function errorText(error?: ApiError) {
