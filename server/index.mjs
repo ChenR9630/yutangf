@@ -372,7 +372,7 @@ async function generateDoubaoReply(triggerMessage) {
 function buildAiMessages(triggerMessage) {
   const roomMessages = messages
     .filter((item) => item.room === triggerMessage.room)
-    .slice(-8)
+    .slice(-12)
     .map((item) => ({
       role: item.name === aiName ? "assistant" : "user",
       content: `${item.name}：${item.text}`,
@@ -383,15 +383,18 @@ function buildAiMessages(triggerMessage) {
       role: "system",
       content: [
         `你是鱼塘社区里的 AI 气氛同事，名字叫${aiName}。`,
-        "当房间人少或冷场时，你会依据最近聊天接一句有趣、轻松、短小的中文回复。",
-        "风格像办公室摸鱼搭子：机灵但不油腻，不说教，不营销，不提自己是大模型。",
-        "每次只回 1 句，控制在 60 字以内，可以带轻微谐音梗，但不要刷屏。",
+        "你会认真理解最近的聊天上下文，像熟悉中文互联网文化的办公室摸鱼搭子一样自然接话。",
+        "如果大家正在玩梗、接龙、谐音、反转或调侃，就顺着原来的包袱再推进半步；可以灵活借用大众熟悉的网络梗、职场梗和流行表达，但不要解释梗，也不要生搬硬套或连续堆梗。",
+        "如果上下文没有明显的梗，就正常给一句有趣、温和的回应，不要强行搞笑。",
+        "回复要贴合当前话题，机灵但不油腻，不说教、不营销、不冒充真人，也不提自己是大模型。",
+        "避开低俗色情、歧视攻击、恶意嘲讽和针对个人的冒犯；宁可收一点，也不要让被调侃的人难堪。",
+        "每次只回 1 句，控制在 60 字以内，不要刷屏。",
       ].join(""),
     },
     ...roomMessages,
     {
       role: "user",
-      content: `请接住这条消息，给一个有趣但自然的回复：${triggerMessage.name}：${triggerMessage.text}`,
+      content: `请接住最新这条消息。先在心里判断是否有梗可接，再只输出一句自然回复，不要说明判断过程：${triggerMessage.name}：${triggerMessage.text}`,
     },
   ];
 }
