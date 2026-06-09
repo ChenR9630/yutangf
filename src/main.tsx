@@ -82,11 +82,79 @@ const topics = ["摸鱼段子", "美食分享", "影视推荐", "职场树洞", 
 const quickTools = ["牛维斯摆烂规划", "扫雷", "华容道", "松弛文案", "表情包库"];
 const slackMoods = ["脑子冒烟", "还能坚持", "心已下班"] as const;
 const slackLoads = ["事情不多", "有点忙", "忙到离谱"] as const;
+const mineScenarios = ["群聊发言", "催进度", "请假", "工作汇报", "拒绝加班"] as const;
 
 type SlackMood = typeof slackMoods[number];
 type SlackLoad = typeof slackLoads[number];
 type SlackTask = { time: string; title: string; detail: string };
 type SlackPlan = { score: number; title: string; comment: string; badge: string; tasks: SlackTask[] };
+type MineScenario = typeof mineScenarios[number];
+type MineRisk = "低" | "中" | "高";
+type MineItem = {
+  title: string;
+  signal: string;
+  advice: string;
+  reply: string;
+  risk: MineRisk;
+};
+
+const mineScenarioData: Record<MineScenario, { context: string; items: MineItem[] }> = {
+  "群聊发言": {
+    context: "消息发出去之前，先检查语气、边界和围观压力。",
+    items: [
+      { title: "只说结论", signal: "缺少背景，容易被理解成甩锅或突然施压。", advice: "补一句背景和你已经做过的动作。", reply: "同步一下背景：目前我已完成前置确认，现需要大家帮忙确认下一步安排。", risk: "中" },
+      { title: "公开点名", signal: "在大群直接点人，容易让协作变成公开问责。", advice: "先描述事项，再温和邀请相关人补充。", reply: "这块可能需要相关同学补充一下进展，方便时帮忙同步即可。", risk: "高" },
+      { title: "连续追问", signal: "短时间多条消息会放大催促感。", advice: "合并成一条，给出明确回复时点。", reply: "信息合并在这里，今天下班前能否帮忙确认一下？如有卡点也可以直接说。", risk: "中" },
+      { title: "玩梗过界", signal: "熟人语境里的玩笑，在群聊中可能失去上下文。", advice: "保留轻松感，但不要指向个人能力或失误。", reply: "今天这个进度有点惊险，咱们一起把最后一段稳稳收住。", risk: "低" },
+      { title: "情绪上头", signal: "反问句和感叹号容易被当成攻击。", advice: "先写事实，再写影响，最后提出请求。", reply: "目前还缺少这份信息，会影响后续排期。麻烦确认一下预计提供时间。", risk: "高" },
+      { title: "范围不清", signal: "“大家看看”通常意味着没人知道该做什么。", advice: "明确谁看、看什么、何时反馈。", reply: "请负责接口和设计的同学重点看标注处，明天 12 点前反馈即可。", risk: "中" },
+    ],
+  },
+  "催进度": {
+    context: "催的是事情，不是审判同事。把时间、影响和求助说清楚。",
+    items: [
+      { title: "灵魂拷问", signal: "“怎么还没好”只制造压力，没有提供信息。", advice: "询问当前状态与预计时间。", reply: "想确认一下目前进展和预计完成时间，我好同步调整后续安排。", risk: "高" },
+      { title: "越级催促", signal: "直接抄送上级会迅速提高对抗感。", advice: "先私下确认卡点，必要时再共同升级。", reply: "如果当前有资源或决策卡点，我们可以一起同步相关负责人协助推进。", risk: "高" },
+      { title: "假装不急", signal: "嘴上说不急，紧接着追问，会让人更难判断优先级。", advice: "坦诚说明真实截止时间。", reply: "这项需要在周三 15 点前完成，能否在明天上午给我一个进度判断？", risk: "中" },
+      { title: "不给出口", signal: "只要求按时完成，却不允许反馈困难。", advice: "主动询问卡点和所需支持。", reply: "如果按当前时间有风险，请直接告诉我卡点，我来协调资源或调整范围。", risk: "中" },
+      { title: "多头轰炸", signal: "私聊、群聊、电话同时追，会打断实际工作。", advice: "选一个渠道，约定下一次同步节点。", reply: "先在这里统一同步，今天 16 点我们再对一次状态，期间不用重复回复。", risk: "低" },
+      { title: "模糊截止", signal: "“尽快”无法形成共同预期。", advice: "给出具体时间并说明原因。", reply: "为了赶上明天的评审，麻烦今天 17 点前给到可预览版本。", risk: "中" },
+    ],
+  },
+  "请假": {
+    context: "请假不是答辩。信息够用、交接明确、隐私适度即可。",
+    items: [
+      { title: "过度解释", signal: "披露太多私人细节，反而增加沟通负担。", advice: "说明时间、类型和工作安排即可。", reply: "我计划周五请假一天，手头事项会在周四完成交接，紧急情况可电话联系。", risk: "低" },
+      { title: "临时消失", signal: "没有交接人和状态说明，会让团队被动补位。", advice: "列出进行中事项和接手人。", reply: "今天下午请假，A 项已交给小林跟进，B 项资料已放在共享目录。", risk: "高" },
+      { title: "请求式卑微", signal: "反复道歉会削弱信息重点，也容易形成不必要承诺。", advice: "礼貌提出安排，不做情绪补偿。", reply: "申请下周一上午请假，相关会议已调整，下午恢复在线。", risk: "中" },
+      { title: "时间含糊", signal: "“晚点回来”不利于同事安排协作。", advice: "给出预计离线和恢复时间。", reply: "我今天 14:00 至 17:00 离线，17:30 后可以处理消息。", risk: "中" },
+      { title: "强行在线", signal: "请假期间承诺随时响应，休息和交接都会失效。", advice: "只保留真正紧急的联系方式。", reply: "请假期间不定时查看消息，如遇影响上线的紧急事项请电话联系。", risk: "低" },
+      { title: "群里首发", signal: "未先与直接负责人同步，可能造成流程误解。", advice: "先确认，再向协作群同步安排。", reply: "已与负责人确认，我将在周三请假一天，相关交接如下。", risk: "中" },
+    ],
+  },
+  "工作汇报": {
+    context: "汇报不是流水账。让对方迅速看到结果、风险和下一步。",
+    items: [
+      { title: "过程堆砌", signal: "大量动作没有结果，听众难以判断价值。", advice: "先说结果，再补关键过程。", reply: "本周已完成首版并通过内部评审，主要调整了流程和异常提示。", risk: "中" },
+      { title: "只报喜讯", signal: "隐藏风险会让问题在最后时刻集中爆发。", advice: "同步风险、影响和解决方案。", reply: "主流程按期完成；数据接口晚一天，已用模拟数据保证评审不受影响。", risk: "高" },
+      { title: "没有数字", signal: "“效果不错”缺少可判断的依据。", advice: "补充一到两个关键指标。", reply: "上线后一周，完成率从 62% 提升到 74%，平均操作时长下降 18%。", risk: "中" },
+      { title: "责任漂移", signal: "反复强调他人问题，会削弱你对项目的掌控感。", advice: "客观说明依赖，并给出推进动作。", reply: "当前依赖法务确认，我已整理争议点，今天会组织一次集中确认。", risk: "高" },
+      { title: "下一步空白", signal: "汇报结束后没人知道接下来做什么。", advice: "明确下一动作、负责人和时间。", reply: "下一步由我在周四前完成优化版，周五安排第二轮验证。", risk: "低" },
+      { title: "细节失控", signal: "所有信息同等展开，会淹没真正的决策点。", advice: "正文只放结论，把细节放附件。", reply: "需要确认的只有两点：上线时间和资源安排，详细记录见附件。", risk: "中" },
+    ],
+  },
+  "拒绝加班": {
+    context: "拒绝的是不合理安排，不是合作本身。提供边界，也提供选项。",
+    items: [
+      { title: "直接硬顶", signal: "只有“不行”会让对方听不到你的实际限制。", advice: "说明客观约束，并给出可执行选项。", reply: "今晚无法继续处理，我可以明早优先完成，或现在先交付最关键的部分。", risk: "高" },
+      { title: "含糊答应", signal: "勉强说“尽量”容易被当成已经承诺。", advice: "明确可完成范围和时间。", reply: "今晚能完成框架，完整版本需要明天下午给到。", risk: "高" },
+      { title: "情绪算账", signal: "翻旧账会让当前问题升级成人际冲突。", advice: "只讨论本次安排和长期改进。", reply: "这次我先按优先级处理；后续建议提前一天确认需求，避免临时加班。", risk: "中" },
+      { title: "没有取舍", signal: "新增任务却不调整旧任务，最终所有承诺都失真。", advice: "请对方明确优先级。", reply: "如果今晚优先做这项，原定的 A 任务会顺延，请帮忙确认取舍。", risk: "中" },
+      { title: "私人辩护", signal: "过度证明私人安排合理，会让边界变成可谈判事项。", advice: "简洁说明无法加班，无需展开隐私。", reply: "今晚已有不可调整的安排，无法加班。我会在明早九点继续推进。", risk: "低" },
+      { title: "群里对抗", signal: "公开拒绝容易让双方都难以下台。", advice: "私下沟通限制，再公开同步结果。", reply: "我先私下和你确认一下今晚的范围，确认后我在群里同步交付安排。", risk: "中" },
+    ],
+  },
+};
 
 const slackTaskPool: Record<SlackLoad, Array<Omit<SlackTask, "time">>> = {
   "事情不多": [
@@ -833,6 +901,7 @@ function Workspace(props: {
   const online = props.online[props.mode] ?? defaultOnline(props.mode);
   const [stickerPanelOpen, setStickerPanelOpen] = useState(false);
   const [slackPanelOpen, setSlackPanelOpen] = useState(false);
+  const [minePanelOpen, setMinePanelOpen] = useState(false);
   const [stickerCategory, setStickerCategory] = useState<"全部" | StickerCategory>("全部");
   const [stickerQuery, setStickerQuery] = useState("");
   const filteredStickers = useMemo(() => {
@@ -901,13 +970,21 @@ function Workspace(props: {
                     topic === "表情包库"
                       ? () => {
                           setSlackPanelOpen(false);
+                          setMinePanelOpen(false);
                           setStickerPanelOpen((value) => !value);
                         }
                       : topic === "牛维斯摆烂规划"
                         ? () => {
                             setStickerPanelOpen(false);
+                            setMinePanelOpen(false);
                             setSlackPanelOpen((value) => !value);
                           }
+                        : topic === "扫雷"
+                          ? () => {
+                              setStickerPanelOpen(false);
+                              setSlackPanelOpen(false);
+                              setMinePanelOpen((value) => !value);
+                            }
                         : undefined
                   }
                 >
@@ -920,6 +997,7 @@ function Workspace(props: {
                 className={stickerPanelOpen ? "sticker-toggle active" : "sticker-toggle"}
                 onClick={() => {
                   setSlackPanelOpen(false);
+                  setMinePanelOpen(false);
                   setStickerPanelOpen((value) => !value);
                 }}
                 title="表情包库"
@@ -947,6 +1025,14 @@ function Workspace(props: {
                 onShare={(text) => {
                   props.onShareSlackPlan(text);
                   setSlackPanelOpen(false);
+                }}
+              />
+            )}
+            {minePanelOpen && props.user && (
+              <WorkplaceMinefield
+                onShare={(text) => {
+                  props.onShareSlackPlan(text);
+                  setMinePanelOpen(false);
                 }}
               />
             )}
@@ -1149,6 +1235,112 @@ function SlackPlanner({
       </div>
     </section>
   );
+}
+
+function WorkplaceMinefield({ onShare }: { onShare: (text: string) => void }) {
+  const [scenario, setScenario] = useState<MineScenario>("群聊发言");
+  const [revealed, setRevealed] = useState<number[]>([]);
+  const [copied, setCopied] = useState<number | null>(null);
+  const data = mineScenarioData[scenario];
+  const cleared = revealed.length;
+  const riskScore = data.items.reduce((total, item) => total + ({ "低": 8, "中": 14, "高": 22 }[item.risk]), 0);
+
+  const changeScenario = (next: MineScenario) => {
+    setScenario(next);
+    setRevealed([]);
+    setCopied(null);
+  };
+
+  const reveal = (index: number) => {
+    setRevealed((current) => current.includes(index) ? current : [...current, index]);
+  };
+
+  const copyReply = async (index: number, reply: string) => {
+    await navigator.clipboard.writeText(reply);
+    setCopied(index);
+    window.setTimeout(() => setCopied((current) => current === index ? null : current), 1600);
+  };
+
+  return (
+    <section className="minefield" aria-label="职场扫雷">
+      <div className="mine-head">
+        <span className="mine-avatar"><ShieldCheck size={22} /></span>
+        <div>
+          <strong>职场扫雷</strong>
+          <small>发出去之前，先替你踩一遍</small>
+        </div>
+        <span className="mine-progress">{cleared}/6</span>
+      </div>
+
+      <div className="mine-scenarios">
+        {mineScenarios.map((item) => (
+          <button key={item} className={scenario === item ? "active" : ""} onClick={() => changeScenario(item)}>
+            {item}
+          </button>
+        ))}
+      </div>
+
+      <div className="mine-brief">
+        <span>风险预判 · {riskScore} 分</span>
+        <p>{data.context}</p>
+      </div>
+
+      <div className="mine-grid">
+        {data.items.map((item, index) => {
+          const isRevealed = revealed.includes(index);
+          return (
+            <article key={item.title} className={isRevealed ? `mine-card revealed risk-${item.risk}` : "mine-card"}>
+              {!isRevealed ? (
+                <button className="mine-cover" onClick={() => reveal(index)} aria-label={`排查第 ${index + 1} 格`}>
+                  <span>{index + 1}</span>
+                  <small>点击排雷</small>
+                </button>
+              ) : (
+                <>
+                  <div className="mine-card-title">
+                    <strong>{item.title}</strong>
+                    <span>{item.risk}风险</span>
+                  </div>
+                  <p>{item.signal}</p>
+                  <small>{item.advice}</small>
+                  <div className="mine-reply">
+                    <span>{item.reply}</span>
+                    <button onClick={() => copyReply(index, item.reply)} title="复制稳妥表达">
+                      {copied === index ? <Check size={13} /> : <Copy size={13} />}
+                    </button>
+                  </div>
+                </>
+              )}
+            </article>
+          );
+        })}
+      </div>
+
+      <div className={cleared === data.items.length ? "mine-report complete" : "mine-report"}>
+        <Activity size={15} />
+        <span>{cleared === data.items.length ? "排雷完成：可以带着边界感出发了" : `已排除 ${cleared} 项，剩余 ${data.items.length - cleared} 项待检查`}</span>
+      </div>
+
+      <div className="mine-actions">
+        <button onClick={() => {
+          setRevealed([]);
+          setCopied(null);
+        }}>
+          <RefreshCw size={15} />
+          重扫
+        </button>
+        <button className="primary" onClick={() => onShare(formatMineReportForChat(scenario, data.items))}>
+          <Share2 size={15} />
+          分享排雷报告
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function formatMineReportForChat(scenario: MineScenario, items: MineItem[]) {
+  const highRisks = items.filter((item) => item.risk === "高").map((item) => item.title).join("、");
+  return `职场扫雷报告｜${scenario}：重点避开“${highRisks}”。推荐表达：${items.find((item) => item.risk === "高")?.reply}`.slice(0, 180);
 }
 
 function createSlackPlan(now: Date, mood: SlackMood, load: SlackLoad, offTime: string, generation: number): SlackPlan {
