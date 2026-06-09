@@ -14,6 +14,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 const dataDir = path.join(rootDir, "data");
 const messagesPath = path.join(dataDir, "messages.json");
+const dailyEngagementPath = path.join(dataDir, "daily-engagement.json");
 const usersPath = path.join(dataDir, "users.json");
 const authDbPath = path.join(dataDir, "auth.sqlite");
 const distDir = path.join(rootDir, "dist");
@@ -69,6 +70,7 @@ const stickerLabels = new Map([
 ]);
 const maxMessagesPerRoom = 120;
 let messages = await loadMessages();
+let dailyEngagement = await loadDailyEngagement();
 await mkdir(dataDir, { recursive: true });
 const authDb = new DatabaseSync(authDbPath);
 initializeAuthDb();
@@ -121,6 +123,30 @@ app.get("/api/bootstrap", (_request, response) => {
       mutedNotifications: true,
     },
   });
+});
+
+app.get("/api/daily", (request, response) => {
+  response.json(dailyVoteResponse(request));
+});
+
+app.post("/api/daily/vote", async (request, response) => {
+  const optionId = String(request.body?.optionId || "");
+  if (!["a", "b", "c"].includes(optionId)) {
+    response.status(400).json({ ok: false, error: "invalid_option" });
+    return;
+  }
+
+  const date = localDateKey();
+  const voterId = readCookie(request, "yt_daily_voter") || crypto.randomUUID();
+  const voterHash = crypto.createHash("sha256").update(`${date}:${voterId}`).digest("hex");
+  const day = ensureDailyVoteDay(date);
+  if (!day.voters[voterHash]) {
+    day.voters[voterHash] = optionId;
+    day.counts[optionId] = (day.counts[optionId] || 0) + 1;
+    await saveDailyEngagement();
+  }
+  setDailyVoterCookie(response, voterId);
+  response.json(dailyVoteResponse(request, voterHash));
 });
 
 app.get("/api/auth/me", (request, response) => {
@@ -281,6 +307,66 @@ async function loadMessages() {
     await writeFile(messagesPath, JSON.stringify(seedMessages, null, 2));
     return seedMessages;
   }
+}
+
+async function loadDailyEngagement() {
+  try {
+    const raw = await readFile(dailyEngagementPath, "utf8");
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function localDateKey() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+function ensureDailyVoteDay(date) {
+  if (!dailyEngagement[date]) {
+    dailyEngagement[date] = {
+      counts: { a: 0, b: 0, c: 0 },
+      voters: {},
+    };
+  }
+  return dailyEngagement[date];
+}
+
+function dailyVoteResponse(request, knownHash) {
+  const date = localDateKey();
+  const day = ensureDailyVoteDay(date);
+  const voterId = readCookie(request, "yt_daily_voter");
+  const voterHash = knownHash || (voterId
+    ? crypto.createHash("sha256").update(`${date}:${voterId}`).digest("hex")
+    : "");
+  const counts = { a: day.counts.a || 0, b: day.counts.b || 0, c: day.counts.c || 0 };
+  return {
+    ok: true,
+    date,
+    counts,
+    total: counts.a + counts.b + counts.c,
+    selected: voterHash ? day.voters[voterHash] || null : null,
+  };
+}
+
+function setDailyVoterCookie(response, voterId) {
+  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  response.setHeader(
+    "Set-Cookie",
+    `yt_daily_voter=${encodeURIComponent(voterId)}; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax${secure}`,
+  );
+}
+
+async function saveDailyEngagement() {
+  const recentDates = Object.keys(dailyEngagement).sort().slice(-45);
+  dailyEngagement = Object.fromEntries(recentDates.map((date) => [date, dailyEngagement[date]]));
+  await writeFile(dailyEngagementPath, JSON.stringify(dailyEngagement, null, 2));
 }
 
 function createMessage(payload = {}, user) {

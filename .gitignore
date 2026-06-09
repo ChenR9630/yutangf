@@ -4,6 +4,7 @@ data/users.json
 data/auth.sqlite
 data/auth.sqlite-shm
 data/auth.sqlite-wal
+data/daily-engagement.json
 STATUS.md
 .DS_Store
 .env

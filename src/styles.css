@@ -175,6 +175,295 @@ p {
   background: #23343b;
 }
 
+.daily-launch-card {
+  grid-column: 1 / -1;
+  min-height: 104px;
+  background: linear-gradient(110deg, #f8fafc 0%, #f8fafc 58%, #eef7ed 100%);
+}
+
+.daily-icon {
+  color: #477626;
+  background: #e6f2d9;
+}
+
+.daily-chevron {
+  transition: transform 160ms ease;
+}
+
+.daily-chevron.open {
+  transform: rotate(90deg);
+}
+
+.daily-pond {
+  display: grid;
+  gap: 16px;
+  width: min(1180px, 100%);
+  margin: 18px auto 26px;
+  padding: 20px;
+  border: 1px solid #c8d5df;
+  border-radius: 10px;
+  background: #f8fafc;
+  box-shadow: 0 12px 28px rgba(49, 71, 92, 0.09);
+}
+
+.daily-heading,
+.daily-progress,
+.daily-finish,
+.daily-finish > div,
+.daily-card-label {
+  display: flex;
+  align-items: center;
+}
+
+.daily-heading {
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.daily-heading > div:first-child > span {
+  color: #66804f;
+  font-size: 12px;
+}
+
+.daily-heading h2 {
+  margin-top: 4px;
+  color: #293b21;
+  font-size: 22px;
+}
+
+.daily-heading p {
+  margin-top: 5px;
+  color: #697a68;
+  font-size: 12px;
+}
+
+.daily-streak {
+  display: grid;
+  grid-template-columns: 22px auto;
+  align-items: center;
+  min-width: 112px;
+  padding: 10px 12px;
+  border: 1px solid #d8c58f;
+  border-radius: 8px;
+  color: #815b16;
+  background: #fff8df;
+}
+
+.daily-streak strong {
+  font-size: 20px;
+}
+
+.daily-streak span {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+  color: #90743f;
+  font-size: 9px;
+  text-align: center;
+}
+
+.daily-progress {
+  gap: 10px;
+}
+
+.daily-progress > div {
+  flex: 1;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #e2e8ed;
+}
+
+.daily-progress > div span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #78a946, #2f8296);
+  transition: width 180ms ease;
+}
+
+.daily-progress strong {
+  color: #557064;
+  font-size: 12px;
+}
+
+.daily-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.daily-card {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  min-width: 0;
+  min-height: 222px;
+  padding: 15px;
+  border: 1px solid #d4dde5;
+  border-radius: 9px;
+  background: #ffffff;
+}
+
+.daily-card-label {
+  gap: 7px;
+  color: #557080;
+  font-size: 11px;
+}
+
+.daily-card > strong {
+  color: #263746;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.daily-card > p {
+  color: #657786;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.daily-binary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+
+.daily-binary button,
+.daily-task-button,
+.daily-poll-options button,
+.daily-finish button {
+  border: 1px solid #c8d5df;
+  border-radius: 6px;
+  color: #52677a;
+  background: #f3f7f9;
+}
+
+.daily-binary button {
+  height: 34px;
+}
+
+.daily-binary button.active {
+  border-color: #4f8ca5;
+  color: #18536d;
+  background: #e0f1f7;
+}
+
+.daily-answer {
+  margin-top: auto !important;
+  padding: 8px;
+  border-left: 3px solid #cc7458;
+  color: #765044 !important;
+  background: #fff1ec;
+}
+
+.daily-answer.correct {
+  border-color: #73a47e;
+  color: #42664b !important;
+  background: #eaf5ed;
+}
+
+.daily-task-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 36px;
+  margin-top: auto;
+}
+
+.daily-task-button.done {
+  border-color: #79a486;
+  color: #376448;
+  background: #e7f3ea;
+}
+
+.daily-poll-options {
+  display: grid;
+  gap: 7px;
+}
+
+.daily-poll-options button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 34px;
+  padding: 0 9px;
+  overflow: hidden;
+  text-align: left;
+}
+
+.daily-poll-options button span,
+.daily-poll-options button b {
+  position: relative;
+  z-index: 1;
+}
+
+.daily-poll-options button b {
+  font-size: 10px;
+}
+
+.daily-poll-options button i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: #dcecf2;
+}
+
+.daily-poll-options button.selected {
+  border-color: #5c91a8;
+  color: #194f67;
+}
+
+.daily-poll-options button.selected i {
+  background: #c8e3ed;
+}
+
+.daily-poll-options button:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.daily-poll-card small {
+  margin-top: auto;
+  color: #718395;
+  font-size: 9px;
+}
+
+.daily-finish {
+  justify-content: space-between;
+  gap: 14px;
+  padding: 11px 12px;
+  border: 1px dashed #a7b7c2;
+  border-radius: 8px;
+  color: #587080;
+  background: #f0f5f7;
+  font-size: 11px;
+}
+
+.daily-finish.complete {
+  border-style: solid;
+  border-color: #80a88a;
+  color: #396448;
+  background: #e8f4eb;
+}
+
+.daily-finish > div {
+  gap: 8px;
+}
+
+.daily-finish button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  height: 34px;
+  padding: 0 12px;
+  border-color: #28708f;
+  color: #ffffff;
+  background: #286b8f;
+}
+
 .status-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(150px, 1fr));
@@ -560,6 +849,14 @@ p {
     grid-template-columns: repeat(6, minmax(34px, 1fr));
     height: 180px;
   }
+
+  .daily-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .daily-card {
+    min-height: 0;
+  }
 }
 
 @media (max-width: 720px) {
@@ -571,6 +868,29 @@ p {
   .launch-panel,
   .status-grid {
     grid-template-columns: 1fr;
+  }
+
+  .daily-launch-card {
+    grid-column: auto;
+  }
+
+  .daily-pond {
+    margin-top: 0;
+    padding: 15px;
+  }
+
+  .daily-heading,
+  .daily-finish {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .daily-streak {
+    align-self: flex-start;
+  }
+
+  .daily-finish button {
+    width: 100%;
   }
 
   .home-topbar {

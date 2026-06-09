@@ -6,6 +6,7 @@ import {
   BarChart3,
   BellOff,
   Brush,
+  CalendarDays,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -15,6 +16,7 @@ import {
   Copy,
   EyeOff,
   FileText,
+  Flame,
   FolderOpen,
   Grid3X3,
   Image,
@@ -97,6 +99,98 @@ type MineItem = {
   reply: string;
   risk: MineRisk;
 };
+type DailyVote = { id: string; label: string };
+type DailyContent = {
+  dateLabel: string;
+  theme: string;
+  mineQuestion: string;
+  mineAnswer: boolean;
+  mineNote: string;
+  slackTask: string;
+  slackDetail: string;
+  pollQuestion: string;
+  pollOptions: DailyVote[];
+};
+type DailyVoteState = {
+  ok: boolean;
+  date: string;
+  counts: Record<string, number>;
+  total: number;
+  selected: string | null;
+};
+
+const dailyContentPool: Omit<DailyContent, "dateLabel">[] = [
+  {
+    theme: "边界感续航日",
+    mineQuestion: "“今晚能做多少算多少”是一句安全的加班回复。",
+    mineAnswer: false,
+    mineNote: "这句话范围不清，容易被理解为整晚待命。更稳妥的是明确今晚能交付什么、剩余何时完成。",
+    slackTask: "关掉提醒 10 分钟",
+    slackDetail: "只推进手头最小的一步，让注意力完整回来一次。",
+    pollQuestion: "临时任务压过来，你通常怎么处理？",
+    pollOptions: [
+      { id: "a", label: "先答应再想办法" },
+      { id: "b", label: "请对方明确优先级" },
+      { id: "c", label: "先做最急的一部分" },
+    ],
+  },
+  {
+    theme: "低耗沟通日",
+    mineQuestion: "催进度时给出具体截止时间，比说“尽快”更不容易踩雷。",
+    mineAnswer: true,
+    mineNote: "具体时间能建立共同预期。最好再补一句任务影响和可提供的支持。",
+    slackTask: "进行一次任务分诊",
+    slackDetail: "把事情分成现在、稍后、不归我，只处理第一类里的一个。",
+    pollQuestion: "你最怕收到哪种工作消息？",
+    pollOptions: [
+      { id: "a", label: "在吗？" },
+      { id: "b", label: "简单改一下" },
+      { id: "c", label: "方便开个会吗" },
+    ],
+  },
+  {
+    theme: "下班线保卫日",
+    mineQuestion: "拒绝加班时，需要详细解释自己的私人安排。",
+    mineAnswer: false,
+    mineNote: "无需证明私人安排是否足够重要。说明无法加班，并提供明早处理或缩小范围的选项即可。",
+    slackTask: "删掉一个非必要动作",
+    slackDetail: "从今天清单里删去一个不影响结果、只增加仪式感的步骤。",
+    pollQuestion: "今天几点之后，你的灵魂先下班？",
+    pollOptions: [
+      { id: "a", label: "17:30 前" },
+      { id: "b", label: "18:00 左右" },
+      { id: "c", label: "身体下班才算" },
+    ],
+  },
+  {
+    theme: "汇报减负日",
+    mineQuestion: "工作汇报把所有过程写全，能让人更清楚你的价值。",
+    mineAnswer: false,
+    mineNote: "过程过多会淹没结果。先说结果、风险和下一步，细节放到附件里更有效。",
+    slackTask: "把汇报缩成三句话",
+    slackDetail: "只保留完成了什么、有什么风险、下一步做什么。",
+    pollQuestion: "你写周报最容易卡在哪里？",
+    pollOptions: [
+      { id: "a", label: "想不起做了什么" },
+      { id: "b", label: "不知道怎么写价值" },
+      { id: "c", label: "内容太多删不动" },
+    ],
+  },
+  {
+    theme: "工位回血日",
+    mineQuestion: "请假时把交接事项和恢复在线时间说清楚，就不必反复道歉。",
+    mineAnswer: true,
+    mineNote: "请假沟通的重点是时间和交接。礼貌说明安排即可，不需要用情绪补偿合理休息。",
+    slackTask: "离开屏幕看远处两分钟",
+    slackDetail: "让眼睛和脑子同时退出当前页面，回来后只做一件事。",
+    pollQuestion: "哪种休息最能让你回血？",
+    pollOptions: [
+      { id: "a", label: "安静发呆" },
+      { id: "b", label: "出去走一圈" },
+      { id: "c", label: "找同事聊两句" },
+    ],
+  },
+];
 
 const mineScenarioData: Record<MineScenario, { context: string; items: MineItem[] }> = {
   "群聊发言": {
@@ -402,6 +496,10 @@ function App() {
           onSubmitAuth={submitAuth}
           onLogout={logout}
           onEnter={setMode}
+          onDailyShare={(text) => {
+            setDraft(text);
+            setMode("word");
+          }}
         />
       ) : mode === "admin" && user?.isAdmin ? (
         <AdminDashboard now={now} user={user} onMode={setMode} onLogout={logout} />
@@ -444,6 +542,7 @@ function Home({
   onSubmitAuth,
   onLogout,
   onEnter,
+  onDailyShare,
 }: {
   now: Date;
   user: AuthUser | null;
@@ -456,7 +555,9 @@ function Home({
   onSubmitAuth: () => void;
   onLogout: () => void;
   onEnter: (mode: ModeId) => void;
+  onDailyShare: (text: string) => void;
 }) {
+  const [dailyOpen, setDailyOpen] = useState(false);
   return (
     <main className="home-shell">
       <header className="home-topbar">
@@ -494,6 +595,16 @@ function Home({
             </div>
             <ChevronRight size={20} />
           </button>
+          <button className="launch-card daily-launch-card" onClick={() => setDailyOpen((value) => !value)}>
+            <div className="launch-icon daily-icon">
+              <CalendarDays size={34} />
+            </div>
+            <div>
+              <strong>每日鱼塘</strong>
+              <span>一道扫雷题、一个微任务、一次匿名投票</span>
+            </div>
+            <ChevronRight className={dailyOpen ? "daily-chevron open" : "daily-chevron"} size={20} />
+          </button>
         </section>
         <AuthPanel
           user={user}
@@ -508,6 +619,8 @@ function Home({
           onAdmin={() => onEnter("admin")}
         />
       </div>
+
+      {dailyOpen && <DailyPond now={now} onShare={onDailyShare} />}
 
       <section className="status-grid">
         <div>
@@ -533,6 +646,180 @@ function Home({
       </footer>
     </main>
   );
+}
+
+function DailyPond({ now, onShare }: { now: Date; onShare: (text: string) => void }) {
+  const dateKey = localDateKey(now);
+  const content = dailyContentForDate(now);
+  const storageKey = `yutang-daily-${dateKey}`;
+  const [mineChoice, setMineChoice] = useState<boolean | null>(null);
+  const [taskDone, setTaskDone] = useState(false);
+  const [voteState, setVoteState] = useState<DailyVoteState | null>(null);
+  const [voteBusy, setVoteBusy] = useState(false);
+  const [voteError, setVoteError] = useState("");
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(storageKey) || "{}") as {
+        mineChoice?: boolean;
+        taskDone?: boolean;
+      };
+      if (typeof saved.mineChoice === "boolean") setMineChoice(saved.mineChoice);
+      if (saved.taskDone === true) setTaskDone(true);
+    } catch {
+      // Ignore malformed local progress and start fresh.
+    }
+    fetch("/api/daily")
+      .then((response) => response.json() as Promise<DailyVoteState>)
+      .then(setVoteState)
+      .catch(() => setVoteError("匿名投票暂时走神了。"));
+  }, [storageKey]);
+
+  useEffect(() => {
+    window.localStorage.setItem(storageKey, JSON.stringify({ mineChoice, taskDone }));
+  }, [mineChoice, storageKey, taskDone]);
+
+  const completed = Number(mineChoice !== null) + Number(taskDone) + Number(Boolean(voteState?.selected));
+  const allDone = completed === 3;
+  const streak = updateDailyStreak(dateKey, allDone);
+
+  const vote = async (optionId: string) => {
+    if (voteBusy || voteState?.selected) return;
+    setVoteBusy(true);
+    setVoteError("");
+    try {
+      const response = await fetch("/api/daily/vote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ optionId }),
+      });
+      const result = await response.json() as DailyVoteState;
+      if (!response.ok) throw new Error("vote_failed");
+      setVoteState(result);
+    } catch {
+      setVoteError("投票没投进去，稍后再试一次。");
+    } finally {
+      setVoteBusy(false);
+    }
+  };
+
+  return (
+    <section className="daily-pond" aria-label="每日鱼塘">
+      <div className="daily-heading">
+        <div>
+          <span>{content.dateLabel}</span>
+          <h2>{content.theme}</h2>
+          <p>三件小事，不卷排名。每天刷新一次。</p>
+        </div>
+        <div className="daily-streak">
+          <Flame size={17} />
+          <strong>{streak}</strong>
+          <span>连续参与</span>
+        </div>
+      </div>
+
+      <div className="daily-progress" aria-label={`今日进度 ${completed}/3`}>
+        <div><span style={{ width: `${completed / 3 * 100}%` }} /></div>
+        <strong>{completed}/3</strong>
+      </div>
+
+      <div className="daily-grid">
+        <article className="daily-card daily-mine-card">
+          <div className="daily-card-label"><ShieldCheck size={15} /> 今日扫雷题</div>
+          <strong>{content.mineQuestion}</strong>
+          <div className="daily-binary">
+            <button className={mineChoice === true ? "active" : ""} onClick={() => setMineChoice(true)}>安全</button>
+            <button className={mineChoice === false ? "active" : ""} onClick={() => setMineChoice(false)}>有雷</button>
+          </div>
+          {mineChoice !== null && (
+            <p className={mineChoice === content.mineAnswer ? "daily-answer correct" : "daily-answer"}>
+              {mineChoice === content.mineAnswer ? "判断正确。" : "这题踩了一下。"} {content.mineNote}
+            </p>
+          )}
+        </article>
+
+        <article className="daily-card daily-task-card">
+          <div className="daily-card-label"><Coffee size={15} /> 今日微任务</div>
+          <strong>{content.slackTask}</strong>
+          <p>{content.slackDetail}</p>
+          <button className={taskDone ? "daily-task-button done" : "daily-task-button"} onClick={() => setTaskDone((value) => !value)}>
+            {taskDone ? <Check size={15} /> : <Clock3 size={15} />}
+            {taskDone ? "已完成，准许喘气" : "领取并打卡"}
+          </button>
+        </article>
+
+        <article className="daily-card daily-poll-card">
+          <div className="daily-card-label"><Activity size={15} /> 匿名立场投票</div>
+          <strong>{content.pollQuestion}</strong>
+          <div className="daily-poll-options">
+            {content.pollOptions.map((option) => {
+              const count = voteState?.counts[option.id] || 0;
+              const percent = voteState?.total ? Math.round(count / voteState.total * 100) : 0;
+              const selected = voteState?.selected === option.id;
+              return (
+                <button key={option.id} className={selected ? "selected" : ""} onClick={() => vote(option.id)} disabled={voteBusy || Boolean(voteState?.selected)}>
+                  <span>{option.label}</span>
+                  {voteState?.selected && <b>{percent}%</b>}
+                  {voteState?.selected && <i style={{ width: `${percent}%` }} />}
+                </button>
+              );
+            })}
+          </div>
+          <small>{voteError || `${voteState?.total || 0} 位鱼友参与 · 不记录账号身份`}</small>
+        </article>
+      </div>
+
+      <div className={allDone ? "daily-finish complete" : "daily-finish"}>
+        <div>
+          <Sparkles size={17} />
+          <span>{allDone ? "今日鱼塘已清空，明天再来松一下。" : `再完成 ${3 - completed} 项，点亮今日参与。`}</span>
+        </div>
+        <button onClick={() => onShare(formatDailyShare(content, completed))}>
+          <Share2 size={15} />
+          带话题去闲聊大厅
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function localDateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function dailyContentForDate(date: Date): DailyContent {
+  const dateKey = localDateKey(date);
+  const index = Array.from(dateKey).reduce((total, char) => total + char.charCodeAt(0), 0) % dailyContentPool.length;
+  return {
+    ...dailyContentPool[index],
+    dateLabel: date.toLocaleDateString("zh-CN", { month: "long", day: "numeric", weekday: "long" }),
+  };
+}
+
+function updateDailyStreak(dateKey: string, completed: boolean) {
+  const key = "yutang-daily-streak";
+  try {
+    const state = JSON.parse(window.localStorage.getItem(key) || "{}") as {
+      lastDate?: string;
+      count?: number;
+    };
+    if (!completed) return state.count || 0;
+    if (state.lastDate === dateKey) return state.count || 1;
+    const yesterday = new Date(`${dateKey}T12:00:00`);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const count = state.lastDate === localDateKey(yesterday) ? (state.count || 0) + 1 : 1;
+    window.localStorage.setItem(key, JSON.stringify({ lastDate: dateKey, count }));
+    return count;
+  } catch {
+    return completed ? 1 : 0;
+  }
+}
+
+function formatDailyShare(content: DailyContent, completed: number) {
+  return `今日鱼塘｜${content.theme}，已完成 ${completed}/3。今日话题：${content.pollQuestion}`;
 }
 
 function AuthPanel({
